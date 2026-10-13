@@ -12,7 +12,7 @@
 ## 실행
 `npm ci` 후 `npm run dev` → http://127.0.0.1:8001
 
-영상 분석은 서버 환경 변수 `GEMINI_API_KEY` 설정이 필요합니다. 로컬은 `.env.local`, Vercel은 프로젝트 환경 변수에 설정하세요. 키가 없으면 연결 준비 안내만 표시하며 분석 결과를 만들지 않습니다.
+영상 분석은 서버 환경 변수 `GEMINI_API_KEY` 설정이 필요합니다. 로컬은 `.env.local`, Vercel은 프로젝트 환경 변수에 설정하세요. 키가 없으면 연결 준비 안내만 표시하며 분석 결과를 만들지 않습니다. 현재 Production 키 설정은 완료했지만 Google 프로젝트가 API 접근 거부(403)를 반환해 실제 영상 분석은 이용할 수 없습니다. Google 지원 확인이 필요합니다.
 
 ## 보안
 HTML에는 Supabase publishable 키만 포함됩니다. 신청 표는 RLS와 INSERT 전용 권한을 사용해 브라우저 조회·수정·삭제를 막습니다. 마이그레이션은 `supabase/migrations`에 있습니다. 비밀 키와 `.env.local`을 커밋하지 마세요.
