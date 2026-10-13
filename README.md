@@ -1,4 +1,8 @@
 # 씬사운드 MVP
+
+공개 주소: https://scenesound-mvp.vercel.app
+
+저장소: https://github.com/chocopiekite/scenesound-mvp
 혼자 영상 만드는 크리에이터를 위한 AI 사운드 어시스턴트.
 
 - 영상 선택 → 장면·사운드 분석 → 추천 체크리스트 저장
@@ -18,3 +22,5 @@ Vercel Git 연동으로 main push 시 자동 배포합니다. API를 포함하�
 
 ## 검증
 `npm test` — 요청 및 AI 응답 검증. 실제 영상 분석은 API 키 연결 후 검증해야 합니다.
+
+수정 후 재배포: `git add . && git commit -m "Update MVP" && git push origin main`
