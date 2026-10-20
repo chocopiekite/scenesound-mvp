@@ -12,7 +12,9 @@
 ## 실행
 `npm ci` 후 `npm run dev` → http://127.0.0.1:8001
 
-영상 분석은 서버 환경 변수 `GEMINI_API_KEY` 설정이 필요합니다. 로컬은 `.env.local`, Vercel은 프로젝트 환경 변수에 설정하세요. 키가 없으면 연결 준비 안내만 표시하며 분석 결과를 만들지 않습니다. 현재 Production 키 설정은 완료했지만 Google 프로젝트가 API 접근 거부(403)를 반환해 실제 영상 분석은 이용할 수 없습니다. Google 지원 확인이 필요합니다.
+TwelveLabs 시험 연결을 준비했습니다. 서버 환경 변수 `TWELVELABS_API_KEY`가 필요하며, 선택 설정 `TWELVELABS_MODEL`의 기본값은 `pegasus1.6`입니다. 로컬은 `.env.local`, Vercel은 프로젝트의 비밀 환경 변수에 설정하세요. 키가 없으면 분석 결과를 만들지 않습니다. Free 플랜(월 $0)과 Vercel Production Secret 설정을 확인했습니다. 실제 공개 API 검증 결과는 진행기록.md에 기록합니다.
+
+입력은 1~60초, 3MB 이하 MP4/WebM/MOV이며 가로·세로 각각 360픽셀 이상, 화면 비율은 2.4:1 이내입니다. 영상은 서버를 통해 TwelveLabs 동기 분석 API로 전달하며 씬사운드 서버에는 저장하지 않습니다. 무료 플랜 범위에서 시험하고 유료 업그레이드는 별도 결정합니다.
 
 ## 보안
 HTML에는 Supabase publishable 키만 포함됩니다. 신청 표는 RLS와 INSERT 전용 권한을 사용해 브라우저 조회·수정·삭제를 막습니다. 마이그레이션은 `supabase/migrations`에 있습니다. 비밀 키와 `.env.local`을 커밋하지 마세요.
