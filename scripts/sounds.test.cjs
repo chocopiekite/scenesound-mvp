@@ -29,3 +29,9 @@ test('quota failures preserve no provider message or secret',async()=>{
   try{const result=await call();assert.equal(result.code,429);assert.doesNotMatch(JSON.stringify(result.data),/private-test-key/);}
   finally{global.fetch=original;delete process.env.FREESOUND_API_KEY;}
 });
+test('empty detailed search falls back once to broader motion sound',async()=>{
+  process.env.FREESOUND_API_KEY='private-test-key';const original=global.fetch;const queries=[];
+  global.fetch=async url=>{queries.push(url.searchParams.get('query'));return {ok:true,json:async()=>({results:[]})};};
+  try{const result=await call('/api/sounds?q=soft%20sliding');assert.equal(result.code,200);assert.deepEqual(queries,['soft sliding','whoosh']);}
+  finally{global.fetch=original;delete process.env.FREESOUND_API_KEY;}
+});

@@ -40,14 +40,16 @@ function addSoundSearch(content,sound){
   const button=document.createElement('button');button.type='button';button.className='secondary listen';button.textContent='어울리는 소리 들어보기 ▶';
   const area=document.createElement('div');area.className='candidates';area.hidden=true;
   const status=document.createElement('p');status.className='note listen-status';status.setAttribute('role','status');
-  content.append(button,status,area);
+  const searchLabel=document.createElement('label');searchLabel.className='note';searchLabel.textContent='찾을 소리 · 영어 검색어를 바꿔도 좋아요';searchLabel.hidden=true;
+  const searchInput=document.createElement('input');searchInput.type='text';searchInput.maxLength=100;searchInput.value=sound.searchQuery||sound.title;searchInput.setAttribute('aria-label',sound.title+' 음원 검색어');searchLabel.append(searchInput);
+  content.append(searchLabel,button,status,area);
   button.onclick=async()=>{
-    button.disabled=true;status.textContent='이 장면에 어울릴 CC0 음원을 찾고 있어요…';
+    searchLabel.hidden=false;button.disabled=true;status.textContent='이 장면에 어울릴 CC0 음원을 찾고 있어요…';
     try{
-      const response=await fetch('/api/sounds?q='+encodeURIComponent(sound.searchQuery||sound.title),{signal:AbortSignal.timeout(15000)});
+      const response=await fetch('/api/sounds?q='+encodeURIComponent(searchInput.value.trim()||sound.searchQuery||sound.title),{signal:AbortSignal.timeout(15000)});
       const data=await response.json();if(!response.ok)throw new Error(data.error||'소리를 불러오지 못했어요.');
       if(!content.isConnected)return;
-      area.replaceChildren();area.hidden=false;
+      delete sound.selectedAudio;area.replaceChildren();area.hidden=false;
       status.textContent=data.candidates.length?'Freesound 검색 후보예요. 직접 듣고 장면에 맞는 소리를 골라 주세요.':'맞는 CC0 음원을 찾지 못했어요. 다른 추천 소리도 확인해 주세요.';
       data.candidates.forEach(candidate=>{
         const card=document.createElement('div');card.className='candidate';
@@ -62,7 +64,7 @@ function addSoundSearch(content,sound){
         choose.onclick=()=>{sound.selectedAudio=candidate;area.querySelectorAll('.candidate').forEach(el=>el.classList.remove('selected'));area.querySelectorAll('button').forEach(el=>{el.textContent='이 소리 선택';el.setAttribute('aria-pressed','false');});card.classList.add('selected');choose.textContent='선택한 소리 ✓';choose.setAttribute('aria-pressed','true');};
         card.append(name,meta,player,source,license,document.createElement('br'),choose);area.append(card);
       });
-      button.hidden=true;
+      button.textContent='이 검색어로 다시 찾기';
     }catch(error){if(content.isConnected)status.textContent=error.name==='TimeoutError'?'검색이 지연되고 있어요. 다시 눌러 주세요.':error.message;}
     finally{button.disabled=false;}
   };
