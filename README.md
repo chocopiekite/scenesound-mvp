@@ -5,7 +5,7 @@
 저장소: https://github.com/chocopiekite/scenesound-mvp
 혼자 영상 만드는 크리에이터를 위한 AI 사운드 어시스턴트.
 
-- 영상 선택 → 장면·사운드 분석 → 추천 체크리스트 저장
+- 영상 선택 → 장면·사운드 분석 → 실제 CC0 음원 후보 미리 듣기·선택 → 출처 포함 체크리스트 저장
 - 이름·연락처·남긴 말 신청 저장 (Supabase)
 - 모바일 대응, 가입·결제 없음
 
@@ -26,3 +26,8 @@ Vercel Git 연동으로 main push 시 자동 배포합니다. API를 포함하�
 `npm test` — 요청 및 AI 응답 검증. 실제 공개 API 합성 영상 분석(HTTP 200), 브라우저 업로드·추천 3개 표시·선택·목록 저장을 확인했습니다.
 
 수정 후 재배포: `git add . && git commit -m "Update MVP" && git push origin main`
+
+## Freesound 미리 듣기
+서버 비밀 변수 `FREESOUND_API_KEY`를 설정하면 추천마다 음원 후보를 최대 3개 검색합니다. CC0만 표시하며 제작자·원본·이용 조건을 함께 제공합니다. 미리 듣기는 Freesound CDN에서 재생하고 원본 다운로드는 Freesound 페이지에서 진행합니다. 원본 영상은 Freesound로 보내지 않고 검색어만 전달합니다.
+
+이번 API 신청은 교육용 MVP 시험 용도입니다. 음원의 CC0 라이선스와 API 이용약관은 별개이며, 상업 서비스 전환 시 Freesound와 API 상업 이용 조건을 확인해야 합니다.
