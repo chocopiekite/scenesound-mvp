@@ -23,6 +23,6 @@ HTML에는 Supabase publishable 키만 포함됩니다. 신청 표는 RLS와 INS
 Vercel Git 연동으로 main push 시 자동 배포합니다. API를 포함하므로 HTML만 별도로 올리지 말고 저장소 전체를 연결하세요.
 
 ## 검증
-`npm test` — 요청 및 AI 응답 검증. 실제 영상 분석은 API 키 연결 후 검증해야 합니다.
+`npm test` — 요청 및 AI 응답 검증. 실제 공개 API 합성 영상 분석(HTTP 200), 브라우저 업로드·추천 3개 표시·선택·목록 저장을 확인했습니다.
 
 수정 후 재배포: `git add . && git commit -m "Update MVP" && git push origin main`
