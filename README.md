@@ -33,3 +33,11 @@ Vercel Git 연동으로 main push 시 자동 배포합니다. API를 포함하�
 이번 API 신청은 교육용 MVP 시험 용도입니다. 음원의 CC0 라이선스와 API 이용약관은 별개이며, 상업 서비스 전환 시 Freesound와 API 상업 이용 조건을 확인해야 합니다.
 
 대용량 전송 설정: `VIDEO_UPLOAD_RELAY_SECRET`을 Vercel Production과 Supabase secrets에 동일한 무작위 값으로 저장합니다. 키는 파일이나 브라우저 코드에 기록하지 않습니다. 전송 함수 배포 명령: `npx supabase functions deploy video-upload --project-ref tyunlhiyvaakxkrubuku --no-verify-jwt --use-api`. JWT 대신 함수 내부에서 HMAC 전송 허가를 검증합니다. Vercel 배포는 main push를 사용합니다.
+
+### Epidemic Sound 로컬 시험 연결
+- `npm run dev`로 http://127.0.0.1:8001 을 열면 `전체 / Freesound / Epidemic Sound` 검색을 시험할 수 있습니다. macOS 키체인의 `scenesound-mvp-epidemic-test` 항목에서 키를 메모리로 읽습니다. 키 값은 소스·HTML·기록에 저장하지 않습니다.
+- 로컬에 Freesound/TwelveLabs 키가 없으면 기존 공개 MVP의 검색·분석 API로 전달합니다. 영상은 기존과 같이 Supabase 전송 함수를 거쳐 TwelveLabs에 전달됩니다.
+- Free API Developer License는 시제품 평가 전용이며 공개 서비스·상용 이용은 허용하지 않습니다. API 키가 잘못 설정되더라도 Vercel 및 루프백 호스트가 아닌 요청에서는 Epidemic Sound API를 사용할 수 없도록 차단합니다. 공개 적용은 별도 계약 확인과 코드 변경 후 진행합니다.
+- 효과음 검색 시 두 라이브러리 결과를 합치고 출처·라이선스를 개별 표시합니다. 일부 공급자 오류는 다른 공급자의 결과를 막지 않습니다.
+- Epidemic Sound 음원 주소는 미리 듣기 버튼을 누를 때 요청하고 세션에서 재사용합니다. 실제 재생 시 익명 세션 ID와 `trackPreviewed` 이벤트를 서버를 통해 전송합니다. 이름·이메일·영상은 이 검색/재생 API에 전송하지 않습니다.
+- 시험 음원은 CC0로 표시하지 않으며 체크리스트에도 시험 이용 조건과 음원 ID를 기록합니다. Free 한도는 계정 포털에서 확인합니다.
