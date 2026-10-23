@@ -1,6 +1,6 @@
 const test=require('node:test');
 const assert=require('node:assert/strict');
-const handler=require('../api/sounds');
+const handler=require('../lib/freesound.cjs');
 async function call(url='/api/sounds?q=door',method='GET'){
   const res={setHeader(){},status(code){this.code=code;return this;},json(data){this.data=data;}};
   await handler({method,url},res);return res;
