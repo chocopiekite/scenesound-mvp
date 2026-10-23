@@ -5,7 +5,7 @@ const schema = {type:'object',properties:{summary:{type:'string'},sounds:{type:'
 module.exports = async function handler(req, res) {
   res.setHeader('Cache-Control', 'no-store');
   const reply = (status, data) => res.status(status).json(data);
-  if (req.method === 'GET') return reply(200, {ready: Boolean(process.env.TWELVELABS_API_KEY), maxBytes:MAX_BYTES,maxDuration:MAX_DURATION});
+  if (req.method === 'GET') return reply(200, {ready: Boolean(process.env.TWELVELABS_API_KEY && process.env.VIDEO_UPLOAD_RELAY_SECRET), maxBytes:MAX_BYTES,maxDuration:MAX_DURATION});
   if (req.method !== 'POST') {res.setHeader('Allow', 'GET, POST');return reply(405,{error:'지원하지 않는 요청이에요.'});}
   if (!process.env.TWELVELABS_API_KEY) return reply(503,{error:'영상 분석 연결을 준비 중이에요. 연결이 완료되면 영상만 올려 바로 추천받을 수 있어요.'});
   let cleanupAsset;
