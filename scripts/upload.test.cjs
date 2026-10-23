@@ -3,7 +3,7 @@ const handler=require('../api/upload'),analyze=require('../api/analyze');
 const {sign}=require('../lib/video-session.cjs');
 async function call(fn,body){const r={setHeader(){},status(c){this.code=c;return this;},json(d){this.data=d;}};await fn({method:'POST',body},r);return r;}
 test('large uploads reject oversized files and forged asset capabilities before provider calls',async()=>{
- process.env.TWELVELABS_API_KEY='test-placeholder';const old=global.fetch;global.fetch=()=>{throw Error('must not fetch');};
+ process.env.TWELVELABS_API_KEY='test-placeholder';process.env.VIDEO_UPLOAD_RELAY_SECRET='relay-test-placeholder';const old=global.fetch;global.fetch=()=>{throw Error('must not fetch');};
  try{assert.equal((await call(handler,{action:'create',size:201*1024*1024,duration:120,mimeType:'video/mp4'})).code,400);assert.equal((await call(handler,{action:'status',token:'forged'})).code,403);}finally{global.fetch=old;}
 });
 test('200 MB session keeps key private and server validates actual media duration',async()=>{
