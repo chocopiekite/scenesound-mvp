@@ -1,5 +1,35 @@
 # 씬사운드 MVP
 
+## Studio 자동 처리 알파 (2026-10-26)
+
+새 방향은 대사가 있는 실사 상황극의 **AAF·참조 영상 → 대사 보정과 전체 사운드 배치 → 멀티트랙 수정·내보내기**입니다. 새 구현은 현재 **로컬 처리용**이며 공개 Vercel 사이트는 기존 추천 서비스를 유지합니다. 공용 작업 서버를 아직 배포하지 않았습니다.
+
+실행 (macOS, Python 3.9+, Node 20+, FFmpeg/ffprobe 필요):
+
+```sh
+python3 -m venv .venv-studio
+.venv-studio/bin/python -m pip install -r studio/requirements.txt
+npm run dev
+```
+
+열기: http://127.0.0.1:8001/studio.html . 기존 추천 화면은 `/`에 있습니다. 현재 컴퓨터의 FFmpeg 8.1.1과 pyaaf2 1.7.1로 확인했습니다.
+
+- AAF: 최상위 Composition 1개, 오디오 트랙 1~24개, 컷(SourceClip)/빈 구간(Filler)/Sequence와 MasterMob 참조 지원. PCM 내장 오디오 또는 사용자가 따로 선택한 연결 오디오. 한 트랙 96클립·전체 256클립·클립 길이 합 60분 이하. 타임라인 Origin 0, 영상 첫 프레임 기준 정렬.
+- 입력: 타임라인 10분, 참조 영상 200MB, 개별 AAF/연결 오디오 512MB, 전체 1GB·64파일 이하. 영상은 가로·세로 360픽셀 이상·비율 2.4:1 이내. 로컬 빈 디스크 3GB 이상 필요. 최대 길이·트랙 수 조합의 부하 시험은 미실시.
+- 사용자가 대사/기존 소리/제외 역할을 확인합니다. 지정된 AAF 트랙을 섞어 분석용 MP4를 만든 뒤 기존 서명된 Supabase 전송/TwelveLabs 분석을 사용합니다. 참조 영상의 카메라 오디오는 중복해서 넣지 않습니다.
+- 대사: 65Hz 고역통과, FFmpeg afftdn의 약한 잡음 감소, 평균 음량 기준 ±6dB 레벨 보정, 완만한 컴프레서·리미터. 대사 전사·화자 분리·심한 클리핑 복원·음악/대사 소스 분리는 미구현. 대사 트랙에 섞인 다른 소리는 함께 처리됩니다.
+- 장면 분석의 위치·검색어로 Freesound CC0/Commons 허용 라이선스 음원을 자동 선택합니다. 라이브러리 미리 듣기 파일로 만드는 초안이며 고품질 원본 확보를 보장하지 않습니다. 배경음만 반복하며 효과음은 반복하지 않습니다. 대사 트랙의 실제 신호에 반응해 추가 소리를 덕킹합니다. 사람이 확인할 추천 초안이며 자동 선택·타이밍의 품질 보장은 없습니다.
+- 결과: 영상과 동기화된 트랙별 재생·파형·원본 비교, 추가 소리의 시작/끝/음량/사용 여부 수정, 다른 후보로 교체, 실제 재렌더링. 트랙 음량과 사용 여부는 내보내기에도 반영됩니다.
+- 출력: 48kHz/16bit 스테레오 WAV 믹스·트랙별 WAV, 소리 입힌 MP4, 내장 PCM AAF와 출처 JSON을 ZIP으로 제공합니다. AAF는 **전체 길이의 렌더된 트랙**이며 원본 클립·플러그인·자동화를 왕복 보존하지 않습니다. 최종 믹스에 버스 리미터가 있어 DAW에서 개별 트랙을 단순 합산한 결과와 피크가 다를 수 있습니다. Pro Tools/Premiere 등 실사용 앱별 호환성은 추가 검증이 필요합니다.
+- 로컬 작업은 OS 임시 폴더의 `scenesound-studio/job-UUID`에 저장합니다. UUID를 아는 로컬 브라우저 세션만 접근 가능하며 Host/Origin/교차 사이트 요청을 제한합니다. 수동 삭제와 다음 서버 시작 시 24시간 지난 폴더 정리를 지원합니다. 렌더링 중에는 파일 접근을 막고 성공한 출력만 노출합니다. 서버 재시작 시 남아 있는 완료 작업을 복원합니다. 개인정보를 서버 로그에 남기지 않습니다.
+- AAF locator의 원래 경로를 직접 읽지 않습니다. 별도로 올린 오디오의 파일 이름과 대조합니다. FFmpeg의 허용 입력 형식·프로토콜과 음원 다운로드 도메인·크기를 제한합니다. Epidemic 시험용 음원은 자동 렌더링에 사용하지 않습니다.
+
+검증: `npm test` (기존 API+로컬 경계 검사), `npm run test:studio` (실제 FFmpeg/AAF 통합 검사). `studio/test_engine.py --fixture /private/tmp/scenesound-studio-fixture`로 개인 정보 없는 합성 AAF·참조 영상을 만들 수 있습니다. 실제 제작자의 파일을 대신 업로드하지 않습니다.
+
+공개 자동 처리로 전환하려면 별도의 장기 실행 작업 서버·인증·비공개 업로드 저장소·작업 큐·용량 및 이용량 제한을 연결해야 합니다. 현재 로컬 API를 그대로 인터넷에 노출하면 안 됩니다. Vercel CLI 직접 배포나 유료 자원 생성은 진행하지 않았습니다.
+
+참고: [pyaaf2 공식](https://github.com/markreidvfx/pyaaf2), [FFmpeg 필터 문서](https://www.ffmpeg.org/ffmpeg-filters.html).
+
 공개 주소: https://scenesound-mvp.vercel.app
 
 저장소: https://github.com/chocopiekite/scenesound-mvp
@@ -25,7 +55,7 @@ Vercel Git 연동으로 main push 시 자동 배포합니다. API를 포함하�
 ## 검증
 `npm test` — 요청 및 AI 응답 검증. 실제 공개 API 합성 영상 분석(HTTP 200), 브라우저 업로드·추천 3개 표시·선택·목록 저장을 확인했습니다.
 
-수정 후 재배포: `git add . && git commit -m "Update MVP" && git push origin main`
+수정 후 재배포: `git add <수정한 파일> && git commit -m "Update MVP" && git push origin main`
 
 ## Freesound 미리 듣기
 서버 비밀 변수 `FREESOUND_API_KEY`를 설정하면 추천마다 음원 후보를 최대 3개 검색합니다. CC0만 표시하며 제작자·원본·이용 조건을 함께 제공합니다. 미리 듣기는 Freesound CDN에서 재생하고 원본 다운로드는 Freesound 페이지에서 진행합니다. 원본 영상은 Freesound로 보내지 않고 검색어만 전달합니다.

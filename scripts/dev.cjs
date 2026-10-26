@@ -13,13 +13,16 @@ const esPreview=require('../api/epidemic-preview.js');
 const soundEvents=require('../api/sound-events.js');
 const upload = require('../api/upload.js');
 const sounds = require('../api/sounds.js');
+const studio = require('../studio/server.cjs');
 http.createServer(async (req,res)=>{
   const route=new URL(req.url,'http://localhost').pathname;
   res.status = code=>{res.statusCode=code;return res;};
   res.json = data=>{res.setHeader('Content-Type','application/json; charset=utf-8');res.end(JSON.stringify(data));};
+  if(route.startsWith('/api/studio/')){await studio(req,res);return;}
+  if(['/studio.html','/studio/studio.js','/studio/studio.css'].includes(route)){res.setHeader('Content-Type',route.endsWith('.js')?'text/javascript; charset=utf-8':route.endsWith('.css')?'text/css; charset=utf-8':'text/html; charset=utf-8');res.setHeader('Referrer-Policy','no-referrer');res.end(fs.readFileSync(path.join(root,route.slice(1))));return;}
   if(route==='/api/epidemic-preview'){await esPreview(req,res);return;}
   if(route==='/api/sounds'){await sounds(req,res);return;}
-  if(process.env.EPIDEMIC_API_KEY&&!process.env.TWELVELABS_API_KEY&&['/api/analyze','/api/upload'].includes(route)){
+  if(!process.env.TWELVELABS_API_KEY&&['/api/analyze','/api/upload'].includes(route)){
     try{const chunks=[];let size=0;for await(const c of req){size+=c.length;if(size>4300000){res.status(413).json({error:'요청이 너무 커요.'});return;}chunks.push(c);}const upstream=await fetch('https://scenesound-mvp.vercel.app'+route,{method:req.method,headers:{'Content-Type':'application/json'},...(chunks.length?{body:Buffer.concat(chunks)}:{}),signal:AbortSignal.timeout(280000)});res.status(upstream.status).json(await upstream.json());}catch{res.status(502).json({error:'공개 영상 분석 서버에 연결하지 못했어요.'});}return;
   }
   if(route==='/api/analyze'||route==='/api/upload'||route==='/api/sound-events'){

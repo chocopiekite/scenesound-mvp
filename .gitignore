@@ -6,3 +6,6 @@ node_modules/
 supabase/.temp/
 supabase/.branches/
 .DS_Store
+.venv-studio/
+__pycache__/
+*.pyc

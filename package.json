@@ -4,6 +4,7 @@
   },
   "scripts": {
     "dev": "node scripts/dev.cjs",
-    "test": "node --test scripts/*.test.cjs"
+    "test": "node --test scripts/*.test.cjs",
+    "test:studio": "PYTHONDONTWRITEBYTECODE=1 .venv-studio/bin/python studio/test_engine.py"
   }
 }
