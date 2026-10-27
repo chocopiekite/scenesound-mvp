@@ -1,8 +1,20 @@
 # 씬사운드 MVP
 
+## 공개 Studio 연결 (2026-10-27)
+
+- 화면: https://scenesound-mvp.vercel.app/studio.html . 홈페이지의 AAF 초안 버튼으로 진입합니다. 기존 영상 추천·신청 기능도 유지합니다.
+- 작업 서버: Render Free, Singapore, Docker (`studio/Dockerfile`). https://scenesound-studio-worker.onrender.com . `/healthz`는 상태 확인용입니다.
+- Vercel Secret `STUDIO_WORKER_SECRET`과 Config `STUDIO_WORKER_URL`, Render Secret `STUDIO_WORKER_SECRET` 및 `STUDIO_ALLOWED_ORIGIN`으로 연결합니다. 비밀 값은 문서·소스에 넣지 않습니다.
+- Vercel은 HttpOnly/Secure 쿠키로 익명 브라우저 ID를 유지하며 2시간짜리 서명 권한을 발급합니다. Render API는 서명과 작업 소유자를 검사합니다. 음원·결과 미디어는 해당 작업의 1시간짜리 읽기 전용 서명 URL로 제공합니다. 다른 방문자의 작업 조회·변경·삭제는 거절합니다. 회원가입·결제는 없습니다.
+- 브라우저는 AAF/연결 오디오/참조 영상을 Render에 직접 업로드합니다. Vercel 요청 본문 한도를 거치지 않습니다. 분석용 영상의 TwelveLabs 업로드는 기존 경로를 유지합니다.
+- 무료 서버의 공개 알파 제한: 5분, 영상 200MB, 각 AAF/오디오 100MB, 전체 400MB, 오디오 8트랙·128클립·사용 구간 합계 20분. 한 브라우저 2작업·전체 4작업·렌더 동시 1개. 실제 최대 조합의 부하 검증은 아직 필요합니다.
+- 임시 파일은 공개 정적 폴더에 두지 않고 소유자 권한으로 접근합니다. 작업은 24시간 후 주기적으로 정리하며 사용자가 바로 지울 수 있습니다. Render Free는 비활동 시 잠들고 첫 접속이 지연될 수 있습니다. 재시작·재배포 시 파일을 잃을 수 있으므로 결과를 바로 내려받아야 합니다. 영구 보관·가용성을 보장하는 운영 버전이 아닙니다.
+- GitHub main push는 Vercel을 자동 배포합니다. Render 공개 Git 저장소 연결은 별도의 수동 배포가 필요할 수 있습니다. 처리 엔진 수정 후 Render에서 최신 커밋 배포도 확인하세요. Vercel CLI 직접 배포는 사용하지 않습니다.
+- 생성된 무료 Render 계정에 결제수단·유료 플랜은 추가하지 않았습니다. 공식 무료 플랜 제약: https://render.com/docs/free .
+
 ## Studio 자동 처리 알파 (2026-10-26)
 
-새 방향은 대사가 있는 실사 상황극의 **AAF·참조 영상 → 대사 보정과 전체 사운드 배치 → 멀티트랙 수정·내보내기**입니다. 새 구현은 현재 **로컬 처리용**이며 공개 Vercel 사이트는 기존 추천 서비스를 유지합니다. 공용 작업 서버를 아직 배포하지 않았습니다.
+새 방향은 대사가 있는 실사 상황극의 **AAF·참조 영상 → 대사 보정과 전체 사운드 배치 → 멀티트랙 수정·내보내기**입니다. 이 절은 10월 26일의 로컬 구현 기록입니다. 이후 공개 연결은 위 10월 27일 안내를 따릅니다.
 
 실행 (macOS, Python 3.9+, Node 20+, FFmpeg/ffprobe 필요):
 

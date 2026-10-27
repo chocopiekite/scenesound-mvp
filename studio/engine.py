@@ -35,7 +35,7 @@ def ff(*args):
         if str(arg) == '-i':
             bounded += ['-protocol_whitelist', 'file,pipe', '-format_whitelist', 'lavfi,wav,aiff,mov,mp4,m4a,3gp,3g2,mj2,matroska,webm,mp3,ogg,flac']
         bounded.append(str(arg))
-    return run(['ffmpeg', '-nostdin', '-hide_banner', '-loglevel', 'info', '-y', '-threads', '1', '-filter_threads', '1', '-filter_complex_threads', '1', *bounded])
+    return run(['ffmpeg', '-nostdin', '-hide_banner', '-loglevel', 'info', '-y', '-threads', '1', '-filter_threads', '1', '-filter_complex_threads', '1', *bounded[:-1], '-threads', '1', bounded[-1]])
 
 
 def probe(path):
@@ -65,7 +65,7 @@ def inspect_job(root):
     if min(width, height) < 360 or max(width, height) / max(1, min(width, height)) > 2.4:
         raise ValueError('영상 가로·세로는 각각 360픽셀 이상, 화면 비율은 2.4:1 이내여야 해요.')
     if not video_stream or video_duration > MAX_DURATION:
-        raise ValueError('참조 영상은 10분 이하의 영상이어야 해요.')
+        raise ValueError('참조 영상은 %d분 이하의 영상이어야 해요.' % (MAX_DURATION // 60))
     linked = {}
     for u in uploads:
         if u['role'] == 'audio':
