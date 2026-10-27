@@ -1,0 +1,14 @@
+services:
+  - type: web
+    name: scenesound-studio-worker
+    runtime: docker
+    plan: free
+    region: singapore
+    dockerfilePath: ./studio/Dockerfile
+    dockerContext: .
+    healthCheckPath: /healthz
+    envVars:
+      - key: STUDIO_WORKER_SECRET
+        sync: false
+      - key: STUDIO_ALLOWED_ORIGIN
+        value: https://scenesound-mvp.vercel.app

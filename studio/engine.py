@@ -16,7 +16,10 @@ from fractions import Fraction
 import aaf2
 
 RATE = 48000
-MAX_DURATION = 600
+MAX_DURATION = int(os.environ.get('STUDIO_MAX_DURATION', 600))
+MAX_TRACKS = int(os.environ.get('STUDIO_MAX_TRACKS', 24))
+MAX_CLIPS = int(os.environ.get('STUDIO_MAX_CLIPS', 256))
+MAX_SECONDS = int(os.environ.get('STUDIO_MAX_SECONDS', 3600))
 
 
 def run(args, timeout=180):
@@ -32,7 +35,7 @@ def ff(*args):
         if str(arg) == '-i':
             bounded += ['-protocol_whitelist', 'file,pipe', '-format_whitelist', 'lavfi,wav,aiff,mov,mp4,m4a,3gp,3g2,mj2,matroska,webm,mp3,ogg,flac']
         bounded.append(str(arg))
-    return run(['ffmpeg', '-nostdin', '-hide_banner', '-loglevel', 'info', '-y', *bounded])
+    return run(['ffmpeg', '-nostdin', '-hide_banner', '-loglevel', 'info', '-y', '-threads', '1', '-filter_threads', '1', '-filter_complex_threads', '1', *bounded])
 
 
 def probe(path):
@@ -136,8 +139,8 @@ def inspect_job(root):
                 if source_start < 0 or float(source_start + duration) > source_duration + 0.025:
                     raise ValueError('AAF 클립의 소스 범위가 오디오 길이를 벗어났어요.')
                 clip_count[0] += 1
-                if clip_count[0] > 256:
-                    raise ValueError('첫 버전은 오디오 클립 256개까지 지원해요.')
+                if clip_count[0] > MAX_CLIPS:
+                    raise ValueError('오디오 클립은 %d개까지 지원해요.' % MAX_CLIPS)
                 clips.append({'file': filename, 'sourceStart': float(source_start), 'start': float(dest), 'duration': float(duration)})
             else:
                 flatten(slot.segment, source_rate, source_start, duration, dest, clips, depth + 1)
@@ -152,7 +155,7 @@ def inspect_job(root):
             if duration <= 0:
                 continue
             if duration > MAX_DURATION:
-                raise ValueError('AAF 타임라인은 10분 이하여야 해요.')
+                raise ValueError('AAF 타임라인은 %d분 이하여야 해요.' % (MAX_DURATION // 60))
             if abs(int(slot['Origin'].value or 0)) > 0:
                 raise ValueError('오디오 트랙 Origin이 0인 AAF로 내보내 주세요. 현재 버전은 다른 Origin을 자동 보정하지 않아요.')
             clips = []
@@ -163,10 +166,10 @@ def inspect_job(root):
                 name = str(slot.name or '오디오 %d' % slot.slot_id)[:100]
                 role = 'dialogue' if re.search(r'dialog|dx|대사|voice|vo|speech', name, re.I) else 'original'
                 tracks.append({'id': 't%d' % len(tracks), 'name': name, 'role': role, 'clips': clips})
-        if not tracks or len(tracks) > 24:
-            raise ValueError('오디오 트랙이 1~24개인 AAF를 사용해 주세요.')
-        if sum(c['duration'] for t in tracks for c in t['clips']) > 3600:
-            raise ValueError('오디오 트랙의 사용 구간 합계는 60분 이하여야 해요.')
+        if not tracks or len(tracks) > MAX_TRACKS:
+            raise ValueError('오디오 트랙이 1~%d개인 AAF를 사용해 주세요.' % MAX_TRACKS)
+        if sum(c['duration'] for t in tracks for c in t['clips']) > MAX_SECONDS:
+            raise ValueError('오디오 트랙의 사용 구간 합계는 %d분 이하여야 해요.' % (MAX_SECONDS // 60))
         end = max(c['start'] + c['duration'] for t in tracks for c in t['clips'])
         if end > video_duration + 0.1:
             raise ValueError('AAF가 참조 영상보다 길어요. 영상 첫 프레임과 AAF 시작점을 맞춰 주세요.')

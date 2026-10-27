@@ -1,0 +1,9 @@
+**
+!studio/
+!studio/Dockerfile
+!studio/requirements.txt
+!studio/engine.py
+!studio/server.cjs
+!studio/worker.cjs
+!lib/
+!lib/studio-auth.cjs
