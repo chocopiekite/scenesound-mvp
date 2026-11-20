@@ -129,7 +129,7 @@ function putChunk(url,headers,chunk,onProgress){return new Promise((resolve,reje
   Object.entries(headers).forEach(([key,value])=>xhr.setRequestHeader(key,value));
   xhr.upload.onprogress=e=>{if(e.lengthComputable)onProgress(e.loaded);};
   xhr.onload=()=>{const etag=xhr.getResponseHeader('ETag');if(xhr.status>=200&&xhr.status<300&&etag)resolve(etag.replaceAll('"',''));else reject(new Error('영상 전송을 확인하지 못했어요. 다시 시도해 주세요.'));};
-  xhr.onerror=()=>reject(new Error('영상 전송이 끊겼어요. 인터넷 연결을 확인하고 다시 시도해 주세요.'));
+  xhr.onerror=()=>reject(new Error('영상 전송 서버에 연결하지 못했어요. 잠시 후 다시 시도해 주세요.'));
   xhr.ontimeout=()=>reject(new Error('영상 전송 시간이 초과됐어요. 더 작은 파일이나 안정적인 연결로 다시 시도해 주세요.'));xhr.send(chunk);
 });}
 async function uploadVideo(file,duration){
