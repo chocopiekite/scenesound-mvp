@@ -30,11 +30,11 @@ test('Vercel session refresh keeps the private browser identity and never return
  const cookie=headers['Set-Cookie'].split(';')[0];await sessionHandler({method:'GET',headers:{cookie}},res);assert.equal(auth.verify(data.token,'session').sid,first.sid);
 });
 test.after(()=>fs.rmSync(process.env.STUDIO_DATA_DIR,{recursive:true,force:true}));
-test('public uploads expose 6 GB total and reject oversize declared media before streaming',async()=>{
- const info=await call('/api/studio/status');assert.equal(info.data.maxBytes,6*1024**3);assert.equal(handler.uploadLimit('video'),2*1024**3);assert.equal(handler.uploadLimit('aaf'),2*1024**3);
+test('public uploads expose 8 GB total and reject oversize declared media before streaming',async()=>{
+ const info=await call('/api/studio/status');assert.equal(info.data.maxBytes,8*1024**3);assert.equal(handler.uploadLimit('video'),2*1024**3);assert.equal(handler.uploadLimit('aaf'),5*1024**3);
  const created=await call('/api/studio/jobs','POST',auth.session(A));const url='/api/studio/jobs/'+created.data.id;
  assert.equal((await call(url+'/files?role=video&name=test.mp4','POST',auth.session(A),{'content-length':String(2*1024**3+1)})).code,413);
- assert.equal((await call(url+'/files?role=aaf&name=test.aaf','POST',auth.session(A),{'content-length':String(2*1024**3+1)})).code,413);
+ assert.equal((await call(url+'/files?role=aaf&name=test.aaf','POST',auth.session(A),{'content-length':String(5*1024**3+1)})).code,413);
  assert.equal((await call(url,'DELETE',auth.session(A))).code,200);
 });
 test('chunk uploads enforce owner, offsets, byte bounds and exactly-once completion',async()=>{

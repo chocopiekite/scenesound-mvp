@@ -9,7 +9,7 @@ const root=path.join(__dirname,'..');
 const auth=require('../lib/studio-auth.cjs');
 const chunkUpload=require('./file-upload.cjs');
 const publicMode=process.env.STUDIO_PUBLIC==='1';
-const maxDuration=1800,maxBytes=6*1024**3;
+const maxDuration=1800,maxBytes=8*1024**3;
 const allowedOrigin=process.env.STUDIO_ALLOWED_ORIGIN||'https://scenesound-mvp.vercel.app';
 const jobs=new Map();let active=false;
 const scratch=process.env.STUDIO_DATA_DIR||path.join(os.tmpdir(),'scenesound-studio');
@@ -31,7 +31,7 @@ const ready=fs.mkdir(scratch,{recursive:true,mode:0o700}).then(async()=>{
   }catch{}
  }
 });
-function uploadLimit(role){return ['aaf','video'].includes(role)?2*1024**3:1024**3;}
+function uploadLimit(role){return role==='aaf'?5*1024**3:role==='video'?2*1024**3:1024**3;}
 function fail(status,message){return Object.assign(Error(message),{status});}
 async function json(req){let size=0,chunks=[];for await(const c of req){size+=c.length;if(size>128*1024)throw fail(413,'작업 설정이 너무 커요.');chunks.push(c);}try{return JSON.parse(Buffer.concat(chunks));}catch{throw fail(400,'작업 설정을 확인해 주세요.');}}
 function run(action,job){return new Promise((resolve,reject)=>{const child=spawn(python,[path.join(__dirname,'engine.py'),action,job.dir],{stdio:['ignore','pipe','pipe']});job.child=child;let data='',errors='';const timer=setTimeout(()=>child.kill('SIGKILL'),120*60*1000);child.stdout.on('data',c=>{data+=c;if(data.length>2e6)child.kill('SIGKILL');});child.stderr.on('data',c=>{errors=(errors+c).slice(-1000);});child.once('error',()=>{clearTimeout(timer);reject(Error('처리 엔진을 시작하지 못했어요. Python 환경과 FFmpeg를 확인해 주세요.'));});child.once('close',code=>{clearTimeout(timer);job.child=null;try{const output=JSON.parse(data);if(code||output.error)reject(Error(output.error||'처리를 완료하지 못했어요.'));else resolve(output);}catch{reject(Error('처리 엔진이 중단됐어요. 지원 형식이나 파일 크기를 확인해 주세요.'));}});});}
@@ -114,9 +114,9 @@ module.exports=async(req,res)=>{
   const extensions={aaf:['.aaf'],video:['.mp4','.mov','.webm'],audio:['.wav','.aif','.aiff','.mp3','.m4a']};
   if(!extensions[role]?.includes(ext)||name.length>250||/[\x00-\x1f/\\]/.test(name)||job.uploads.length>=64)throw fail(400,'파일 이름과 형식·개수를 확인해 주세요.');
   if(role!=='audio'&&job.uploads.some(u=>u.role===role))throw fail(400,'AAF와 참조 영상은 각각 하나만 넣어 주세요.');
-  const declared=Number(req.headers['content-length']);if(Number.isFinite(declared)&&(declared>uploadLimit(role)||declared+job.bytes>maxBytes))throw fail(413,'파일 용량 제한을 초과했어요. 영상 2GB·AAF 2GB·오디오 1GB·전체 6GB 이내로 골라 주세요.');
+  const declared=Number(req.headers['content-length']);if(Number.isFinite(declared)&&(declared>uploadLimit(role)||declared+job.bytes>maxBytes))throw fail(413,'파일 용량 제한을 초과했어요. 영상 2GB·AAF 5GB·오디오 1GB·전체 8GB 이내로 골라 주세요.');
   job.uploading=true;const file=randomUUID()+ext,handle=await fs.open(path.join(job.dir,file),'wx',0o600);let bytes=0;
-  try{for await(const c of req){bytes+=c.length;if(bytes>uploadLimit(role)||job.bytes+bytes>maxBytes)throw fail(413,publicMode?'영상 2GB·AAF 2GB·오디오 1GB·전체 6GB 이하여야 해요.':'영상 2GB·AAF 2GB·오디오 1GB·전체 6GB 이하여야 해요.');await handle.write(c);}}catch(e){await fs.rm(path.join(job.dir,file),{force:true});throw e;}finally{await handle.close();job.uploading=false;}
+  try{for await(const c of req){bytes+=c.length;if(bytes>uploadLimit(role)||job.bytes+bytes>maxBytes)throw fail(413,publicMode?'영상 2GB·AAF 5GB·오디오 1GB·전체 8GB 이하여야 해요.':'영상 2GB·AAF 5GB·오디오 1GB·전체 8GB 이하여야 해요.');await handle.write(c);}}catch(e){await fs.rm(path.join(job.dir,file),{force:true});throw e;}finally{await handle.close();job.uploading=false;}
   job.bytes+=bytes;job.uploads.push({role,name,file});await fs.writeFile(path.join(job.dir,'uploads.json'),JSON.stringify(job.uploads));return res.json({uploaded:true});
  }
  if(action==='inspect'){if([...job.transfers?.values()||[]].some(t=>!t.done))throw fail(409,'파일 전송이 끝난 뒤 분석해 주세요.');await mutate(job,async()=>{job.stage='AAF의 트랙·클립·연결 오디오를 읽고 있어요.';job.manifest=await run('inspect',job);return job.manifest;});return res.status(202).json({started:true});}

@@ -5,7 +5,7 @@ const {randomUUID}=require('node:crypto');
 const CHUNK_BYTES=8*1024**2;
 const RESERVE=1024**3;
 const fail=(status,message)=>Object.assign(Error(message),{status});
-async function space(dir,bytes){const s=await fs.statfs(dir);if(s.bavail*s.bsize<bytes+RESERVE)throw fail(507,'작업 서버의 임시 공간이 부족해요. 이전 작업을 지우거나 필요한 오디오 구간만 포함해 내보내 주세요.');}
+async function space(dir,bytes){const s=await fs.statfs(dir);if(s.bavail*s.bsize<bytes+RESERVE)throw fail(507,'작업 서버의 임시 공간이 부족해요. 이전 작업을 정리한 뒤 다시 시도해 주세요. 계속되면 서버 임시 공간을 더 확보해야 해요.');}
 async function handle(req,res,job,action,url,{json,uploadLimit,maxBytes}){
  job.transfers??=new Map();
  if(action==='uploads'&&req.method==='POST'){
@@ -16,7 +16,7 @@ async function handle(req,res,job,action,url,{json,uploadLimit,maxBytes}){
   if(job.manifest&&!(role==='video'&&!job.manifest.video))throw fail(409,'새 AAF는 새 작업에서 올려 주세요.');
   if([...job.transfers.values()].some(t=>!t.done))throw fail(409,'진행 중인 파일 전송을 먼저 끝내 주세요.');
   if(job.uploads.length>=64||role!=='audio'&&job.uploads.some(u=>u.role===role))throw fail(400,'파일 개수와 중복 파일을 확인해 주세요.');
-  if(!Number.isSafeInteger(b.size)||b.size<1||b.size>uploadLimit(role)||job.bytes+b.size>maxBytes)throw fail(413,'AAF 2GB·영상 2GB·오디오 1GB·전체 6GB 이내로 골라 주세요.');
+  if(!Number.isSafeInteger(b.size)||b.size<1||b.size>uploadLimit(role)||job.bytes+b.size>maxBytes)throw fail(413,'AAF 5GB·영상 2GB·오디오 1GB·전체 8GB 이내로 골라 주세요.');
   await space(job.dir,b.size);
   const id=randomUUID(),file=id+ext;await fs.writeFile(path.join(job.dir,file),'',{flag:'wx',mode:0o600});
   job.transfers.set(id,{id,file,name,role,size:b.size,offset:0,done:false});

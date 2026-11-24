@@ -55,6 +55,39 @@ def save(path, data):
     path.write_text(json.dumps(data, ensure_ascii=False, indent=2), encoding='utf8')
 
 
+def open_pcm_stream(essence):
+    # pyaaf2's normal Stream constructor builds a Python-int list per sector.
+    # Compact 32-bit sector indexes avoid hundreds of MB for a multi-GB PCM stream.
+    from aaf2.cfb import Stream, ENDOFCHAIN
+    prop = essence['Data']
+    entry = prop.parent.dir.get(prop.stream_name) if prop.attached else prop.dir
+    storage = essence.root.cfb
+    if entry is None or entry.byte_size < storage.min_stream_max_size:
+        return essence.open('r')
+    stream = Stream.__new__(Stream)
+    stream.storage, stream.dir, stream.mode, stream.pos = storage, entry, 'r', 0
+    chain = array.array('I')
+    current = fast = entry.sector_id
+    max_sectors = len(storage.fat)
+    while current != ENDOFCHAIN:
+        if not isinstance(current, int) or not 0 <= current < max_sectors or len(chain) >= max_sectors:
+            raise ValueError('AAF 오디오 섹터 연결을 읽지 못했어요.')
+        chain.append(current)
+        current = storage.fat[current]
+        for _ in range(2):
+            if fast == ENDOFCHAIN:
+                break
+            if not isinstance(fast, int) or not 0 <= fast < max_sectors:
+                raise ValueError('AAF 오디오 섹터 연결이 잘못됐어요.')
+            fast = storage.fat[fast]
+        if current != ENDOFCHAIN and current == fast:
+            raise ValueError('AAF 오디오 섹터가 순환해요.')
+    if len(chain) * storage.sector_size < entry.byte_size:
+        raise ValueError('AAF 오디오가 잘렸어요.')
+    stream.fat_chain = chain
+    return stream
+
+
 def inspect_job(root):
     uploads = json.loads((root / 'uploads.json').read_text())
     aafs = [u for u in uploads if u['role'] == 'aaf']
@@ -101,7 +134,7 @@ def inspect_job(root):
                 if not 8000 <= sample_rate <= 192000 or first < 0 or frames < 1 or first + frames > int(descriptor.length):
                     raise ValueError('AAF 오디오 샘플 범위를 확인해 주세요.')
                 filename = 'essence-%d.wav' % len(extracted)
-                stream = mob.essence.open('r')
+                stream = open_pcm_stream(mob.essence)
                 stream.seek(first * channels * width)
                 remaining = frames * channels * width
                 import shutil

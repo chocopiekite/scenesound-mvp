@@ -1,7 +1,7 @@
 'use strict';
 const $=id=>document.getElementById(id);
-let apiBase='',apiToken='',mediaTicket='',publicWorker=false,limits={duration:1800,bytes:6*1024**3};
-async function configureServer(){if(location.hostname==='127.0.0.1')return;const r=await fetch('/api/studio-session',{cache:'no-store'});const data=await r.json();if(!r.ok)throw Error(data.error||'작업 서버 연결을 준비 중이에요.');const url=new URL(data.worker);if(url.protocol!=='https:'||!url.hostname.endsWith('.onrender.com'))throw Error('작업 서버 주소를 확인해 주세요.');apiBase=url.origin;apiToken=data.token;publicWorker=true;limits={duration:data.maxDuration,bytes:data.maxBytes};document.querySelector('header .badge').textContent='실제 자동 처리 · 공개 알파';$('upload-limits').textContent='30분 이하 · AAF 2GB · 영상 2GB · 오디오 1GB · 전체 6GB 이하. AAF와 영상의 시작점을 맞춰 주세요.';$('privacy-note').textContent='AAF·오디오·영상과 결과 파일은 Render 작업 서버의 임시 비공개 폴더에서 처리해요. 브라우저별 임시 권한으로 작업을 구분해요. 선택한 AAF 소리를 합친 분석용 영상은 Supabase 전송 서버를 거쳐 TwelveLabs로 전달되며 분석 후 삭제를 요청해요. 소리 검색어는 Freesound·Wikimedia Commons로 전달돼요. 재시작·연결 중단으로 파일이 사라지거나 외부 분석 파일이 남을 수 있어요.';$('retention-note').textContent='무료 서버는 잠들었다가 다시 켜질 수 있어요. 재시작·배포 시 임시 파일이 사라질 수 있으니 결과를 바로 내려받아 주세요. 완료 작업은 최대 24시간 보관하고 정리합니다.';}
+let apiBase='',apiToken='',mediaTicket='',publicWorker=false,limits={duration:1800,bytes:8*1024**3};
+async function configureServer(){if(location.hostname==='127.0.0.1')return;const r=await fetch('/api/studio-session',{cache:'no-store'});const data=await r.json();if(!r.ok)throw Error(data.error||'작업 서버 연결을 준비 중이에요.');const url=new URL(data.worker);if(url.protocol!=='https:'||!url.hostname.endsWith('.onrender.com'))throw Error('작업 서버 주소를 확인해 주세요.');apiBase=url.origin;apiToken=data.token;publicWorker=true;limits={duration:data.maxDuration,bytes:data.maxBytes};document.querySelector('header .badge').textContent='실제 자동 처리 · 공개 알파';$('upload-limits').textContent='30분 이하 · AAF 5GB · 영상 2GB · 오디오 1GB · 전체 8GB 이하. AAF와 영상의 시작점을 맞춰 주세요.';$('privacy-note').textContent='AAF·오디오·영상과 결과 파일은 Render 작업 서버의 임시 비공개 폴더에서 처리해요. 브라우저별 임시 권한으로 작업을 구분해요. 선택한 AAF 소리를 합친 분석용 영상은 Supabase 전송 서버를 거쳐 TwelveLabs로 전달되며 분석 후 삭제를 요청해요. 소리 검색어는 Freesound·Wikimedia Commons로 전달돼요. 재시작·연결 중단으로 파일이 사라지거나 외부 분석 파일이 남을 수 있어요.';$('retention-note').textContent='무료 서버는 잠들었다가 다시 켜질 수 있어요. 재시작·배포 시 임시 파일이 사라질 수 있으니 결과를 바로 내려받아 주세요. 완료 작업은 최대 24시간 보관하고 정리합니다.';}
 let useDialogue=false;
 let jobId,manifest,result,selectedVideo,working=false,players=[],originalPlayer,mode='wet',revision=0,playbackGeneration=0,selectedAssetId=null,dirty=false,localVideoUrl;
 const emptyTimeline=$('timeline').innerHTML;
@@ -39,8 +39,8 @@ $('import-form').onsubmit=async e=>{
  }
  if(!video)throw Error('참조 영상을 선택해 주세요.');
  const files=[...(aaf?[{file:aaf,role:'aaf'}]:[]),{file:video,role:'video'},...audio.map(file=>({file,role:'audio'}))];
- if(video.size>2*1024**3||files.reduce((s,x)=>s+x.file.size,0)>limits.bytes||files.length>64)throw Error(publicWorker?'영상 2GB·전체 6GB·파일 64개 이하여야 해요.':'영상은 2GB, 전체는 6GB, 파일은 64개 이하여야 해요.');
- if(files.some(x=>x.file.size>(['aaf','video'].includes(x.role)?2*1024**3:1024**3)))throw Error('AAF·영상은 각 2GB, 오디오는 각 1GB 이하여야 해요.');
+ if(video.size>2*1024**3||files.reduce((s,x)=>s+x.file.size,0)>limits.bytes||files.length>64)throw Error(publicWorker?'영상 2GB·전체 8GB·파일 64개 이하여야 해요.':'영상은 2GB, 전체는 6GB, 파일은 64개 이하여야 해요.');
+ if(files.some(x=>x.file.size>(x.role==='aaf'?5*1024**3:x.role==='video'?2*1024**3:1024**3)))throw Error('AAF는 5GB, 영상은 2GB, 오디오는 1GB 이하여야 해요.');
  if(jobId){try{await request('jobs/'+jobId,null,'DELETE');}catch(e){if(!/만료|찾을 수 없/.test(e.message))throw e;}sessionStorage.removeItem('scenesound-effects-job');jobId=null;}
  manifest=null;result=null;stopPlayers();$('sound-edits').replaceChildren();selectAsset(null);resetDirty();$('timeline').innerHTML=emptyTimeline;$('roles-panel').hidden=true;$('result-panel').hidden=true;jobId=(await request('jobs')).id;sessionStorage.setItem('scenesound-effects-job',jobId);$('job-actions').hidden=false;selectedVideo=video;
  for(const [i,{file,role}]of files.entries()){
