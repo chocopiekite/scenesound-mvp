@@ -8,7 +8,7 @@ const {spawn}=require('node:child_process');
 const root=path.join(__dirname,'..');
 const auth=require('../lib/studio-auth.cjs');
 const publicMode=process.env.STUDIO_PUBLIC==='1';
-const maxDuration=publicMode?300:600,maxBytes=(publicMode?400:1024)*1024*1024;
+const maxDuration=publicMode?300:600,maxBytes=1024*1024*1024;
 const allowedOrigin=process.env.STUDIO_ALLOWED_ORIGIN||'https://scenesound-mvp.vercel.app';
 const jobs=new Map();let active=false;
 const scratch=process.env.STUDIO_DATA_DIR||path.join(os.tmpdir(),'scenesound-studio');
@@ -30,6 +30,7 @@ const ready=fs.mkdir(scratch,{recursive:true,mode:0o700}).then(async()=>{
   }catch{}
  }
 });
+function uploadLimit(role){return(role==='video'?500:publicMode?250:512)*1024*1024;}
 function fail(status,message){return Object.assign(Error(message),{status});}
 async function json(req){let size=0,chunks=[];for await(const c of req){size+=c.length;if(size>128*1024)throw fail(413,'작업 설정이 너무 커요.');chunks.push(c);}try{return JSON.parse(Buffer.concat(chunks));}catch{throw fail(400,'작업 설정을 확인해 주세요.');}}
 function run(action,job){return new Promise((resolve,reject)=>{const child=spawn(python,[path.join(__dirname,'engine.py'),action,job.dir],{stdio:['ignore','pipe','pipe']});job.child=child;let data='',errors='';const timer=setTimeout(()=>child.kill('SIGKILL'),20*60*1000);child.stdout.on('data',c=>{data+=c;if(data.length>2e6)child.kill('SIGKILL');});child.stderr.on('data',c=>{errors=(errors+c).slice(-1000);});child.once('error',()=>{clearTimeout(timer);reject(Error('처리 엔진을 시작하지 못했어요. Python 환경과 FFmpeg를 확인해 주세요.'));});child.once('close',code=>{clearTimeout(timer);job.child=null;try{const output=JSON.parse(data);if(code||output.error)reject(Error(output.error||'처리를 완료하지 못했어요.'));else resolve(output);}catch{reject(Error('처리 엔진이 중단됐어요. 지원 형식이나 파일 크기를 확인해 주세요.'));}});});}
@@ -66,9 +67,9 @@ function validateSettings(job,body){
  return{roles,clean:body.clean!==false,trackGains:gains,...(body.useDialogue?{useDialogue:true}:{})};
 }
 async function serveFile(req,res,job,name){
- const allowed=new Set([...(job.uploads.filter(u=>u.role==='video').map(u=>u.file)),...(job.data?.tracks||[]).flatMap(t=>[t.file,t.export]),'mix.wav','original.wav','dialogue-approved.wav','dialogue-original.wav','dialogue-approved.json','dialogue-report.json','analysis-reference.mp4','SceneSound.aaf','preview.mp4','credits.json','SceneSound.zip']);
+ const allowed=new Set([...(job.uploads.filter(u=>u.role==='video').map(u=>u.file)),...(job.data?.tracks||[]).flatMap(t=>[t.file,t.export]),'mix.wav','original.wav','dialogue-approved.wav','dialogue-original.wav','dialogue-approved.json','dialogue-scenes.aaf','dialogue-package.zip','dialogue-report.json','analysis-reference.mp4','SceneSound.aaf','preview.mp4','credits.json','SceneSound.zip']);
  if(!allowed.has(name)||name!==path.basename(name)||job.busy)throw fail(404,'파일을 찾을 수 없거나 처리 중이에요.');
- const upload=['dialogue-approved.wav','dialogue-original.wav','dialogue-approved.json','analysis-reference.mp4'].includes(name)||job.uploads.some(u=>u.role==='video'&&u.file===name);const p=path.join(job.dir,...(!upload&&job.data?.renderDirectory?[job.data.renderDirectory]:[]),name);const stat=await fs.stat(p);let start=0,end=stat.size-1;
+ const upload=['dialogue-approved.wav','dialogue-original.wav','dialogue-approved.json','dialogue-scenes.aaf','dialogue-package.zip','analysis-reference.mp4'].includes(name)||job.uploads.some(u=>u.role==='video'&&u.file===name);const p=path.join(job.dir,...(!upload&&job.data?.renderDirectory?[job.data.renderDirectory]:[]),name);const stat=await fs.stat(p);let start=0,end=stat.size-1;
  if(req.headers.range){const m=/^bytes=(\d+)-(\d*)$/.exec(req.headers.range);if(!m)throw fail(416,'재생 범위를 확인해 주세요.');start=Number(m[1]);end=m[2]?Math.min(Number(m[2]),end):end;if(start>end||start>=stat.size)throw fail(416,'재생 범위를 확인해 주세요.');res.statusCode=206;res.setHeader('Content-Range',`bytes ${start}-${end}/${stat.size}`);}
  res.setHeader('Accept-Ranges','bytes');res.setHeader('Content-Length',end-start+1);res.setHeader('Content-Type',name.endsWith('.wav')?'audio/wav':/\.(mp4|mov|webm)$/.test(name)?(name.endsWith('.webm')?'video/webm':'video/mp4'):name.endsWith('.json')?'application/json':'application/octet-stream');if(/\.(zip|aaf)$/.test(name)||new URL(req.url,'http://worker').searchParams.get('download')==='1')res.setHeader('Content-Disposition',`attachment; filename="${name}"`);fss.createReadStream(p,{start,end}).pipe(res);
 }
@@ -82,7 +83,7 @@ module.exports=async(req,res)=>{
   if(origin&&origin!==allowedOrigin)throw fail(403,'허용되지 않은 요청이에요.');
   if(origin===allowedOrigin){res.setHeader('Access-Control-Allow-Origin',allowedOrigin);res.setHeader('Vary','Origin');res.setHeader('Access-Control-Allow-Headers','Authorization,Content-Type,Range');res.setHeader('Access-Control-Allow-Methods','GET,POST,DELETE,OPTIONS');res.setHeader('Access-Control-Expose-Headers','Content-Range,Content-Length,Accept-Ranges');}
   if(req.method==='OPTIONS'){res.statusCode=204;return res.end();}
-  if(url.pathname==='/api/studio/status'&&req.method==='GET')return res.json({ready:fss.existsSync(python),local:false,maxDuration,maxBytes,dialogueVersion:1});
+  if(url.pathname==='/api/studio/status'&&req.method==='GET')return res.json({ready:fss.existsSync(python),local:false,maxDuration,maxBytes,dialogueVersion:2});
   const token=(req.headers.authorization||'').replace(/^Bearer /,'');identity=auth.verify(token,'session');
   if(!identity&&req.method==='GET'&&url.pathname.includes('/files/'))identity=auth.verify(url.searchParams.get('ticket'),'media');
   if(!identity)throw fail(401,'작업 권한이 만료됐어요. 화면을 다시 열어 주세요.');
@@ -90,7 +91,7 @@ module.exports=async(req,res)=>{
   const host=req.headers.host||'';if(!/^127\.0\.0\.1:8001$/.test(host))throw fail(403,'로컬 처리 서버에서만 사용할 수 있어요.');
   if(req.headers.origin&&req.headers.origin!=='http://127.0.0.1:8001')throw fail(403,'허용되지 않은 요청이에요.');
   if(['cross-site','same-site'].includes(req.headers['sec-fetch-site']))throw fail(403,'허용되지 않은 요청이에요.');
-  if(url.pathname==='/api/studio/status'&&req.method==='GET')return res.json({ready:fss.existsSync(python),local:true,maxDuration,maxBytes,dialogueVersion:1});
+  if(url.pathname==='/api/studio/status'&&req.method==='GET')return res.json({ready:fss.existsSync(python),local:true,maxDuration,maxBytes,dialogueVersion:2});
  }
  if(url.pathname==='/api/studio/jobs'&&req.method==='POST'){
   for(const [id,j]of jobs)if(!j.busy&&Date.now()-j.created>lifetime){await fs.rm(j.dir,{recursive:true,force:true});jobs.delete(id);}
@@ -111,8 +112,9 @@ module.exports=async(req,res)=>{
   const extensions={aaf:['.aaf'],video:['.mp4','.mov','.webm'],audio:['.wav','.aif','.aiff','.mp3','.m4a']};
   if(!extensions[role]?.includes(ext)||name.length>250||/[\x00-\x1f/\\]/.test(name)||job.uploads.length>=64)throw fail(400,'파일 이름과 형식·개수를 확인해 주세요.');
   if(role!=='audio'&&job.uploads.some(u=>u.role===role))throw fail(400,'AAF와 참조 영상은 각각 하나만 넣어 주세요.');
+  const declared=Number(req.headers['content-length']);if(Number.isFinite(declared)&&(declared>uploadLimit(role)||declared+job.bytes>maxBytes))throw fail(413,'파일 용량 제한을 초과했어요. 영상 500MB·AAF/오디오 250MB·전체 1GB 이내로 골라 주세요.');
   job.uploading=true;const file=randomUUID()+ext,handle=await fs.open(path.join(job.dir,file),'wx',0o600);let bytes=0;
-  try{for await(const c of req){bytes+=c.length;if(bytes>(role==='video'?200:publicMode?100:512)*1024*1024||job.bytes+bytes>maxBytes)throw fail(413,publicMode?'영상 200MB·각 AAF/오디오 100MB·전체 400MB 이하여야 해요.':'영상은 200MB, 각 오디오는 512MB, 전체는 1GB 이하여야 해요.');await handle.write(c);}}catch(e){await fs.rm(path.join(job.dir,file),{force:true});throw e;}finally{await handle.close();job.uploading=false;}
+  try{for await(const c of req){bytes+=c.length;if(bytes>uploadLimit(role)||job.bytes+bytes>maxBytes)throw fail(413,publicMode?'영상 500MB·각 AAF/오디오 250MB·전체 1GB 이하여야 해요.':'영상 500MB·각 AAF/오디오 512MB·전체 1GB 이하여야 해요.');await handle.write(c);}}catch(e){await fs.rm(path.join(job.dir,file),{force:true});throw e;}finally{await handle.close();job.uploading=false;}
   job.bytes+=bytes;job.uploads.push({role,name,file});await fs.writeFile(path.join(job.dir,'uploads.json'),JSON.stringify(job.uploads));return res.json({uploaded:true});
  }
  if(action==='inspect'){await mutate(job,async()=>{job.stage='AAF의 트랙·클립·연결 오디오를 읽고 있어요.';job.manifest=await run('inspect',job);return job.manifest;});return res.status(202).json({started:true});}
@@ -121,7 +123,8 @@ module.exports=async(req,res)=>{
  const body=await json(req);
  if(action==='dialogue'){
   const config=validateSettings(job,body);if(!Object.values(config.roles).includes('dialogue'))throw fail(400,'대사 트랙을 하나 이상 선택해 주세요.');
-  await mutate(job,async()=>{job.stage='동일한 대사 중복을 정리하고 전체 −24 LUFS를 측정·보정하고 있어요.';job.settings={...config,deduplicate:body.deduplicate!==false,assets:[]};await fs.writeFile(path.join(job.dir,'settings.json'),JSON.stringify(job.settings));const result=await renderJob(job,'dialogue');job.dialogueReady=true;job.dialogueData=result;return result;});return res.status(202).json({started:true});
+  const scenes=body.scenes||[{start:0,title:'씬 1'}];if(!Array.isArray(scenes)||scenes.length<1||scenes.length>30||scenes.some((s,i)=>!s||!Number.isFinite(s.start)||s.start<0||s.start>=job.manifest.duration||(i===0?s.start!==0:s.start<=scenes[i-1].start)||typeof s.title!=='string'||!s.title.trim()||s.title.length>100))throw fail(400,'씬 시작 시간과 이름을 확인해 주세요. 첫 씬은 0초, 이후는 시간순이어야 해요.');
+  await mutate(job,async()=>{job.stage='동일한 대사 중복을 정리하고 전체 −24 LUFS를 측정·보정하고 있어요.';job.settings={...config,deduplicate:body.deduplicate!==false,scenes,assets:[]};await fs.writeFile(path.join(job.dir,'settings.json'),JSON.stringify(job.settings));const result=await renderJob(job,'dialogue');job.dialogueReady=true;job.dialogueData=result;return result;});return res.status(202).json({started:true});
  }
  if(action==='prepare-analysis'){const config=validateSettings(job,body);await mutate(job,async()=>{job.stage='선택한 AAF 트랙을 참조 영상에 맞춰 분석용 영상을 만들고 있어요.';await fs.writeFile(path.join(job.dir,'settings.json'),JSON.stringify(config));return await run('prepare',job);});return res.status(202).json({started:true});}
  if(action==='render'){
@@ -138,4 +141,5 @@ module.exports=async(req,res)=>{
  }catch(e){if(!res.headersSent)res.status(e.status||500).json({error:e.status?e.message:'로컬 작업을 진행하지 못했어요. 처리 엔진과 파일 형식을 확인해 주세요.'});else res.destroy();}
 };
 module.exports.validatePlan=validatePlan;
+module.exports.uploadLimit=uploadLimit;
 if(publicMode)setInterval(async()=>{await ready;for(const [id,j]of jobs)if(!j.busy&&!j.uploading&&Date.now()-j.created>lifetime){await fs.rm(j.dir,{recursive:true,force:true}).catch(()=>{});jobs.delete(id);}},60000).unref();

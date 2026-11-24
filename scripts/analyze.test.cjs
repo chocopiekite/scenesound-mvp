@@ -18,3 +18,8 @@ test('rejects truncated output and handles free quota without leaking provider d
     assert.doesNotMatch(JSON.stringify({logs,result}),/test-only-placeholder|private video content/);
   } finally {global.fetch=original;console.error=originalError;delete process.env.TWELVELABS_API_KEY;}
 });
+test('scene analysis uses a dedicated schema and rejects unordered scene boundaries',async()=>{
+ process.env.TWELVELABS_API_KEY='test-only-placeholder';const original=global.fetch;let scenes=[{start:0,title:'실내',reason:'실내 대화'},{start:3,title:'복도',reason:'공간 변화'}];
+ global.fetch=async(url,options)=>{const b=JSON.parse(options.body);assert.ok(b.response_format.json_schema.properties.scenes);assert.ok(!b.response_format.json_schema.properties.sounds);return{ok:true,json:async()=>({finish_reason:'stop',data:JSON.stringify({summary:'공간이 바뀌는 두 씬',scenes})})};};
+ try{const body={task:'scenes',video:'AAAA',mimeType:'video/mp4',duration:5};const r=await call('POST',body);assert.equal(r.code,200);assert.equal(r.data.scenes.length,2);scenes=[{start:2,title:'실내',reason:'첫 씬이 잘못됨'}];assert.equal((await call('POST',body)).code,502);}finally{global.fetch=original;delete process.env.TWELVELABS_API_KEY;}
+});

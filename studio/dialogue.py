@@ -69,34 +69,73 @@ def render_dialogue(source, engine):
             filters += ['highpass=f=65', 'afftdn=nr=6:nf=-50:tn=1']
         filters += ['afade=t=in:d=%f' % fade, 'afade=t=out:st=%f:d=%f' % (max(0, item['duration'] - fade), fade)]
         name = 'clean-%d.wav' % i
-        engine.ff('-i', root / item['file'], '-af', ','.join(filters), '-ar', 48000, '-ac', 2, '-c:a', 'pcm_s16le', root / name)
+        engine.ff('-i', root / item['file'], '-af', ','.join(filters), '-ar', 48000, '-ac', 2, '-c:a', 'pcm_f32le', root / name)
         inputs.append({'file': name, 'start': item['start']})
         adjustments.append({'track': item['track'], 'start': item['start'], 'gainDb': round(gain, 2)})
     engine.mix(root, original, 'original.wav', duration)
-    engine.mix(root, inputs, 'dialogue-pre.wav', duration)
+    scenes = settings.get('scenes') or [{'start': 0, 'title': '씬 1'}]
+    stems = []
+    for i, scene in enumerate(scenes):
+        start, end = scene['start'], scenes[i + 1]['start'] if i + 1 < len(scenes) else duration
+        pieces, clips = [], []
+        for index, item in enumerate(retained):
+            lo, hi = max(start, item['start']), min(end, item['start'] + item['duration'])
+            if hi <= lo:
+                continue
+            name = 'scene-%d-part-%d.wav' % (i, index)
+            fade = min(.005, (hi - lo) / 4)
+            engine.ff('-ss', lo - item['start'], '-i', root / ('clean-%d.wav' % index), '-t', hi - lo,
+                      '-af', 'afade=t=in:d=%f,afade=t=out:st=%f:d=%f' % (fade, hi - lo - fade, fade),
+                      '-ar', 48000, '-ac', 2, '-c:a', 'pcm_f32le', root / name)
+            pieces.append({'file': name, 'start': lo})
+            clips.append({'start': lo, 'duration': hi - lo})
+        if pieces:
+            name = 'scene-%02d-pre.wav' % (i + 1)
+            engine.mix(root, pieces, name, duration, limit=False, codec='pcm_f32le')
+            stems.append({'id': 'scene-%02d' % (i + 1), 'name': scene['title'], 'role': 'dialogue', 'file': name, 'gain': 0, 'clips': clips})
+    engine.mix(root, [{'file': t['file']} for t in stems], 'dialogue-pre.wav', duration, limit=False, codec='pcm_f32le')
     before = measure(engine, root / 'original.wav')
     measured = measure(engine, root / 'dialogue-pre.wav')
     if not math.isfinite(measured['input_i']):
         raise ValueError('대사 보정 후 측정 가능한 소리가 없어요.')
-    normalization = ('loudnorm=I=-24:TP=-2:LRA=50:measured_I=%f:measured_TP=%f:measured_LRA=%f:measured_thresh=%f:offset=%f:linear=true' %
-                     (measured['input_i'], measured['input_tp'], measured['input_lra'], measured['input_thresh'], measured['target_offset']))
-    engine.ff('-i', root / 'dialogue-pre.wav', '-af', normalization + ',apad,atrim=end_sample=%d' % round(duration * 48000), '-ar', 48000, '-ac', 2, '-c:a', 'pcm_s16le', root / 'mix.wav')
+    # A shared linear gain preserves the exact relation between the bus and scene stems.
+    # Never secretly apply a different limiter to each exported track.
+    peak = max([measured['input_tp']] + [measure(engine, root / t['file'])['input_tp'] for t in stems])
+    gain = min(-24 - measured['input_i'], -2 - peak)
+    for t in stems:
+        t['export'] = t['id'] + '.wav'
+        engine.ff('-i', root / t['file'], '-af', 'volume=%fdB' % gain, '-ar', 48000, '-ac', 2, '-c:a', 'pcm_s16le', root / t['export'])
+        t['waveform'] = engine.waveform(root / t['export'], duration)
+    engine.mix(root, [{'file': t['export']} for t in stems], 'mix.wav', duration, limit=False)
     after = measure(engine, root / 'mix.wav')
     reached = math.isfinite(after['input_i']) and abs(after['input_i'] + 24) <= .5 and after['input_tp'] <= -1.8
-    report = {'targetLufs': -24, 'beforeLufs': finite(before['input_i']), 'afterLufs': finite(after['input_i']), 'truePeakDbtp': finite(after['input_tp']), 'targetReached': reached, 'duplicates': duplicates, 'removedEmptyTracks': manifest.get('emptyTracks', 0), 'removedDuplicateTracks': len(selected) - len(cleaned_tracks), 'adjustments': adjustments, 'deduplicate': settings.get('deduplicate', True)}
-    warnings = ['동일 위치·길이·디코딩 PCM이 일치하는 클립만 중복 제외했어요. 다른 마이크·서로 다른 동시 대사는 유지해요.', '짧은 클립은 LUFS 측정이 불안정할 수 있어요. 클립 간 보정은 ±6dB, 경계 페이드는 최대 3ms로 제한해요.', '트랙 이름으로 대사를 제안해요. 음성 인식이나 마이크 자동 선택은 하지 않아요.']
+    report = {'targetLufs': -24, 'beforeLufs': finite(before['input_i']), 'afterLufs': finite(after['input_i']), 'truePeakDbtp': finite(after['input_tp']), 'targetReached': reached, 'duplicates': duplicates, 'removedEmptyTracks': manifest.get('emptyTracks', 0), 'removedDuplicateTracks': len(selected) - len(cleaned_tracks), 'adjustments': adjustments, 'deduplicate': settings.get('deduplicate', True), 'scenes': scenes, 'sceneTracks': len(stems), 'busGainDb': round(gain, 2)}
+    warnings = ['동일 위치·길이·디코딩 PCM이 일치하는 클립만 중복 제외했어요. 다른 마이크·서로 다른 동시 대사는 유지해요.', '원래 타이밍과 겹쳐 말하는 구간을 유지해요. 클립 간 보정은 ±6dB, 원본 클립 페이드는 최대 3ms, 씬 트랙 경계 페이드는 최대 5ms예요.', '트랙 이름으로 대사를 제안해요. 음성 인식이나 마이크 자동 선택은 하지 않아요.']
     if not reached:
-        warnings.append('−24 LUFS 목표 허용 오차(±0.5 LU) 또는 피크 기준을 충족하지 못했어요. 측정값을 확인해 주세요.')
+        warnings.append('피크를 보호하면서 씬별 트랙의 합을 유지하기 위해 보정량을 제한했어요. −24 LUFS 목표 허용 오차(±0.5 LU) 또는 피크 기준을 충족하지 못했으니 측정값을 확인해 주세요.')
     engine.save(root / 'dialogue-report.json', report)
     engine.save(root / 'manifest.json', manifest)
-    tracks = [{**t, 'gain': 0, 'waveform': []} for t in cleaned_tracks]
-    result = {'mode': 'dialogue', 'renderDirectory': root.name, 'duration': duration, 'tracks': tracks, 'assets': [], 'report': report, 'warnings': warnings, 'summary': '대사 중복 정리와 전체 −24 LUFS 보정', 'files': ['mix.wav', 'original.wav', 'dialogue-report.json']}
+    tracks = stems
+    import aaf2
+    with aaf2.open(str(root / 'SceneSound.aaf'), 'w') as f:
+        comp = f.create.CompositionMob('SceneSound dialogue scenes')
+        comp.usage = 'Usage_TopLevel'
+        f.content.mobs.append(comp)
+        for t in tracks:
+            mob = f.create.MasterMob(t['name'])
+            f.content.mobs.append(mob)
+            source_clip = mob.import_audio_essence(str(root / t['export']), edit_rate=48000)
+            slot = comp.create_sound_slot(48000)
+            slot.name = t['name']
+            slot.segment.components.append(mob.create_source_clip(source_clip.slot_id))
+            slot.segment.length = round(duration * 48000)
+    result = {'mode': 'dialogue', 'renderDirectory': root.name, 'duration': duration, 'tracks': tracks, 'assets': [], 'report': report, 'warnings': warnings, 'summary': '대사 중복 정리와 전체 −24 LUFS 보정', 'files': ['mix.wav', 'original.wav', 'dialogue-report.json', 'SceneSound.aaf'] + [t['export'] for t in tracks]}
     engine.save(root / 'result.json', result)
     with zipfile.ZipFile(root / 'SceneSound.zip', 'w', zipfile.ZIP_STORED) as z:
         for name in result['files']:
             z.write(root / name, name)
     # Stable hand-off copy; effects passes do not overwrite these source files.
-    for filename, destination in [('mix.wav', 'dialogue-approved.wav'), ('original.wav', 'dialogue-original.wav')]:
+    for filename, destination in [('mix.wav', 'dialogue-approved.wav'), ('original.wav', 'dialogue-original.wav'), ('SceneSound.aaf', 'dialogue-scenes.aaf'), ('SceneSound.zip', 'dialogue-package.zip')]:
         temp = source / (destination + '.tmp')
         shutil.copyfile(root / filename, temp)
         temp.replace(source / destination)

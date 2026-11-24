@@ -57,6 +57,8 @@ def inspect_job(root):
     uploads = json.loads((root / 'uploads.json').read_text())
     aafs = [u for u in uploads if u['role'] == 'aaf']
     videos = [u for u in uploads if u['role'] == 'video']
+    if not aafs and len(videos) == 1:
+        return inspect_video_job(root, videos[0])
     if len(aafs) != 1 or len(videos) > 1:
         raise ValueError('AAF 1개를 선택해 주세요. 참조 영상은 선택 사항이에요.')
     video_duration = None
@@ -182,6 +184,20 @@ def inspect_job(root):
     return result
 
 
+def inspect_video_job(root, video):
+    duration = validate_video(root / video['file'])
+    info, _ = probe(root / video['file'])
+    if any(s.get('codec_type') == 'audio' for s in info.get('streams', [])):
+        ff('-i', root / video['file'], '-vn', '-ac', 2, '-ar', RATE, '-c:a', 'pcm_s16le', root / 'camera-original.wav')
+    else:
+        ff('-f', 'lavfi', '-i', 'anullsrc=r=48000:cl=stereo', '-t', duration, '-c:a', 'pcm_s16le', root / 'camera-original.wav')
+    result = {'name': video['name'], 'videoOnly': True, 'duration': duration, 'video': video['file'], 'emptyTracks': 0,
+              'tracks': [{'id': 't0', 'name': '영상 원본 소리', 'role': 'original', 'clips': [{'file': 'camera-original.wav', 'sourceStart': 0, 'start': 0, 'duration': duration}]}],
+              'warnings': ['영상 원본 소리는 유지하고 효과음·배경음을 더해요. 대사 클리닝은 별도 대사 도구에서 진행해 주세요.']}
+    save(root / 'manifest.json', result)
+    return result
+
+
 def validate_video(path):
     info, duration = probe(path)
     stream = next((s for s in info.get('streams', []) if s.get('codec_type') == 'video'), {})
@@ -204,14 +220,14 @@ def attach_video(root):
     return manifest
 
 
-def mix(root, inputs, output, duration, duck=None):
+def mix(root, inputs, output, duration, duck=None, limit=True, codec='pcm_s16le'):
     """inputs: file, delay seconds, gain dB. Each file is already trimmed to fit."""
     args, filters = [], []
     for i, item in enumerate(inputs):
         args += ['-i', str(root / item['file'])]
         filters.append('[%d:a]aresample=48000,aformat=channel_layouts=stereo,volume=%fdB,adelay=%d:all=1[a%d]' % (i, item.get('gain', 0), round(item.get('start', 0) * 1000), i))
     if not inputs:
-        ff('-f', 'lavfi', '-i', 'anullsrc=r=48000:cl=stereo', '-t', duration, '-c:a', 'pcm_s16le', root / output)
+        ff('-f', 'lavfi', '-i', 'anullsrc=r=48000:cl=stereo', '-t', duration, '-c:a', codec, root / output)
         return
     labels = ''.join('[a%d]' % i for i in range(len(inputs)))
     filters.append(labels + 'amix=inputs=%d:normalize=0:dropout_transition=0,apad,atrim=0:%f[m]' % (len(inputs), duration))
@@ -221,8 +237,8 @@ def mix(root, inputs, output, duration, duck=None):
         last = '[d]'
     else:
         last = '[m]'
-    filters.append(last + 'alimiter=limit=0.89:level=0:latency=1,apad,atrim=end_sample=%d[out]' % round(duration * RATE))
-    ff(*args, '-filter_complex', ';'.join(filters), '-map', '[out]', '-t', duration, '-ar', RATE, '-c:a', 'pcm_s16le', root / output)
+    filters.append(last + ('alimiter=limit=0.89:level=0:latency=1,' if limit else '') + 'apad,atrim=end_sample=%d[out]' % round(duration * RATE))
+    ff(*args, '-filter_complex', ';'.join(filters), '-map', '[out]', '-t', duration, '-ar', RATE, '-c:a', codec, root / output)
 
 
 def waveform(path, duration):

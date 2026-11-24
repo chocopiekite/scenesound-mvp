@@ -30,3 +30,10 @@ test('Vercel session refresh keeps the private browser identity and never return
  const cookie=headers['Set-Cookie'].split(';')[0];await sessionHandler({method:'GET',headers:{cookie}},res);assert.equal(auth.verify(data.token,'session').sid,first.sid);
 });
 test.after(()=>fs.rmSync(process.env.STUDIO_DATA_DIR,{recursive:true,force:true}));
+test('public uploads expose 1 GB total and reject oversize declared media before streaming',async()=>{
+ const info=await call('/api/studio/status');assert.equal(info.data.maxBytes,1024**3);assert.equal(handler.uploadLimit('video'),500*1024**2);assert.equal(handler.uploadLimit('aaf'),250*1024**2);
+ const created=await call('/api/studio/jobs','POST',auth.session(A));const url='/api/studio/jobs/'+created.data.id;
+ assert.equal((await call(url+'/files?role=video&name=test.mp4','POST',auth.session(A),{'content-length':String(500*1024**2+1)})).code,413);
+ assert.equal((await call(url+'/files?role=aaf&name=test.aaf','POST',auth.session(A),{'content-length':String(250*1024**2+1)})).code,413);
+ assert.equal((await call(url,'DELETE',auth.session(A))).code,200);
+});

@@ -106,7 +106,7 @@ class EngineTests(unittest.TestCase):
             m = engine.inspect_job(root)
             self.assertIsNone(m['video'])
             self.assertEqual(m['duration'], 8)
-            settings = {'roles': {t['id']: 'dialogue' for t in m['tracks']}, 'clean': True, 'deduplicate': True}
+            settings = {'roles': {t['id']: 'dialogue' for t in m['tracks']}, 'clean': True, 'deduplicate': True, 'scenes': [{'start': 0, 'title': '실내 씬'}, {'start': 4, 'title': '복도 씬'}]}
             engine.save(root / 'settings.json', settings)
             r = dialogue.render_dialogue(root, engine)
             self.assertEqual(len(r['report']['duplicates']), 2)
@@ -121,12 +121,29 @@ class EngineTests(unittest.TestCase):
                 w.setpos(3 * 48000)
                 self.assertEqual(set(w.readframes(4800)), {0})
             self.assertTrue((root / 'dialogue-approved.wav').exists())
+            scene_samples = []
+            for t in r['tracks']:
+                with wave.open(str(out / t['export'])) as w:
+                    scene_samples.append(array.array('h', w.readframes(w.getnframes())))
+            with wave.open(str(out / 'mix.wav')) as w:
+                bus = array.array('h', w.readframes(w.getnframes()))
+            self.assertLessEqual(max(abs(bus[i] - sum(s[i] for s in scene_samples)) for i in range(len(bus))), 2)
+            # Exported scene tracks start with a fade rather than a hard boundary click.
+            self.assertEqual(scene_samples[0][0], 0)
+            self.assertEqual(scene_samples[1][4 * 48000 * 2], 0)
             # Disabling duplicate removal restores both original tracks.
             settings['deduplicate'] = False
             engine.save(root / 'settings.json', settings)
             restored = dialogue.render_dialogue(root, engine)
             self.assertEqual(len(restored['report']['duplicates']), 0)
             self.assertEqual(len(restored['tracks']), 2)
+            with aaf2.open(str(root / restored['renderDirectory'] / 'SceneSound.aaf')) as f:
+                comp = next(f.content.toplevel())
+                self.assertEqual([slot.name for slot in comp.slots], ['실내 씬', '복도 씬'])
+                self.assertTrue(all(slot.length == 8 * 48000 for slot in comp.slots))
+            reimport = root / restored['renderDirectory']
+            engine.save(reimport / 'uploads.json', [{'role': 'aaf', 'file': 'SceneSound.aaf', 'name': 'SceneSound.aaf'}])
+            self.assertEqual(len(engine.inspect_job(reimport)['tracks']), 2)
             # Real video attachment and effects hand-off preserve the approved dialogue bus.
             engine.save(root / 'uploads.json', uploads)
             engine.attach_video(root)
@@ -152,13 +169,26 @@ class EngineTests(unittest.TestCase):
             engine.save(root / 'settings.json', {'roles': {'t0': 'dialogue', 't1': 'dialogue'}, 'clean': False})
             r = dialogue.render_dialogue(root, engine)
             self.assertEqual(r['report']['duplicates'], [])
-            self.assertEqual(len(r['tracks']), 2)
+            self.assertEqual(len(r['tracks']), 1)
+            self.assertEqual(len(r['tracks'][0]['clips']), 3)
             # Silence must fail explicitly rather than claim a successful -24 LUFS result.
             with wave.open(str(root / first['clips'][0]['file']), 'wb') as w:
                 w.setparams((1, 2, 48000, 0, 'NONE', 'not compressed'))
                 w.writeframes(bytes(8 * 48000 * 2))
             with self.assertRaisesRegex(ValueError, '측정 가능한'):
                 dialogue.render_dialogue(root, engine)
+
+    def test_video_only_sound_tool_needs_no_aaf(self):
+        with tempfile.TemporaryDirectory(prefix='scenesound-video-only-') as d:
+            root = Path(d)
+            fixture(root)
+            engine.save(root / 'uploads.json', [{'role': 'video', 'name': 'reference.mp4', 'file': 'reference.mp4'}])
+            m = engine.inspect_job(root)
+            self.assertTrue(m['videoOnly'])
+            self.assertEqual(m['tracks'][0]['role'], 'original')
+            engine.save(root / 'settings.json', {'roles': {'t0': 'original'}, 'clean': False, 'assets': [], 'trackGains': {}})
+            r = engine.render(root)
+            self.assertTrue((root / r['renderDirectory'] / 'preview.mp4').exists())
 
     def test_linked_media_requires_explicit_upload(self):
         with tempfile.TemporaryDirectory(prefix='scenesound-linked-') as d:

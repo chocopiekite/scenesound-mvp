@@ -19,7 +19,7 @@ http.createServer(async (req,res)=>{
   res.status = code=>{res.statusCode=code;return res;};
   res.json = data=>{res.setHeader('Content-Type','application/json; charset=utf-8');res.end(JSON.stringify(data));};
   if(route.startsWith('/api/studio/')){await studio(req,res);return;}
-  if(['/studio.html','/dialogue.html','/sound-finder.html','/studio/dialogue.js','/studio/studio.js','/studio/studio.css'].includes(route)){res.setHeader('Content-Type',route.endsWith('.js')?'text/javascript; charset=utf-8':route.endsWith('.css')?'text/css; charset=utf-8':'text/html; charset=utf-8');res.setHeader('Referrer-Policy','no-referrer');res.end(fs.readFileSync(path.join(root,route.slice(1))));return;}
+  if(['/studio.html','/dialogue.html','/sound-finder.html','/studio/dialogue.js','/studio/video-transfer.js','/studio/studio.js','/studio/studio.css'].includes(route)){res.setHeader('Content-Type',route.endsWith('.js')?'text/javascript; charset=utf-8':route.endsWith('.css')?'text/css; charset=utf-8':'text/html; charset=utf-8');res.setHeader('Referrer-Policy','no-referrer');res.end(fs.readFileSync(path.join(root,route.slice(1))));return;}
   if(route==='/api/epidemic-preview'){await esPreview(req,res);return;}
   if(route==='/api/sounds'){await sounds(req,res);return;}
   if(!process.env.TWELVELABS_API_KEY&&['/api/analyze','/api/upload'].includes(route)){

@@ -1,12 +1,12 @@
 'use strict';
 const $=id=>document.getElementById(id);
 let apiBase='',apiToken='',mediaTicket='',publicWorker=false,limits={duration:600,bytes:1024**3};
-async function configureServer(){if(location.hostname==='127.0.0.1')return;const r=await fetch('/api/studio-session',{cache:'no-store'});const data=await r.json();if(!r.ok)throw Error(data.error||'작업 서버 연결을 준비 중이에요.');const url=new URL(data.worker);if(url.protocol!=='https:'||!url.hostname.endsWith('.onrender.com'))throw Error('작업 서버 주소를 확인해 주세요.');apiBase=url.origin;apiToken=data.token;publicWorker=true;limits={duration:data.maxDuration,bytes:data.maxBytes};document.querySelector('header .badge').textContent='실제 자동 처리 · 공개 알파';$('upload-limits').textContent='5분 이하 · 영상 200MB · 각 AAF/오디오 100MB · 전체 400MB 이하. AAF와 영상의 시작점을 맞춰 주세요.';$('privacy-note').textContent='AAF·오디오·영상과 결과 파일은 Render 작업 서버의 임시 비공개 폴더에서 처리해요. 브라우저별 임시 권한으로 작업을 구분해요. 선택한 AAF 소리를 합친 분석용 영상은 Supabase 전송 서버를 거쳐 TwelveLabs로 전달되며 분석 후 삭제를 요청해요. 소리 검색어는 Freesound·Wikimedia Commons로 전달돼요. 재시작·연결 중단으로 파일이 사라지거나 외부 분석 파일이 남을 수 있어요.';$('retention-note').textContent='무료 서버는 잠들었다가 다시 켜질 수 있어요. 재시작·배포 시 임시 파일이 사라질 수 있으니 결과를 바로 내려받아 주세요. 완료 작업은 최대 24시간 보관하고 정리합니다.';}
+async function configureServer(){if(location.hostname==='127.0.0.1')return;const r=await fetch('/api/studio-session',{cache:'no-store'});const data=await r.json();if(!r.ok)throw Error(data.error||'작업 서버 연결을 준비 중이에요.');const url=new URL(data.worker);if(url.protocol!=='https:'||!url.hostname.endsWith('.onrender.com'))throw Error('작업 서버 주소를 확인해 주세요.');apiBase=url.origin;apiToken=data.token;publicWorker=true;limits={duration:data.maxDuration,bytes:data.maxBytes};document.querySelector('header .badge').textContent='실제 자동 처리 · 공개 알파';$('upload-limits').textContent='5분 이하 · 영상 500MB · 각 AAF/오디오 250MB · 전체 1GB 이하. AAF와 영상의 시작점을 맞춰 주세요.';$('privacy-note').textContent='AAF·오디오·영상과 결과 파일은 Render 작업 서버의 임시 비공개 폴더에서 처리해요. 브라우저별 임시 권한으로 작업을 구분해요. 선택한 AAF 소리를 합친 분석용 영상은 Supabase 전송 서버를 거쳐 TwelveLabs로 전달되며 분석 후 삭제를 요청해요. 소리 검색어는 Freesound·Wikimedia Commons로 전달돼요. 재시작·연결 중단으로 파일이 사라지거나 외부 분석 파일이 남을 수 있어요.';$('retention-note').textContent='무료 서버는 잠들었다가 다시 켜질 수 있어요. 재시작·배포 시 임시 파일이 사라질 수 있으니 결과를 바로 내려받아 주세요. 완료 작업은 최대 24시간 보관하고 정리합니다.';}
 let useDialogue=false;
 let jobId,manifest,result,selectedVideo,working=false,players=[],originalPlayer,mode='wet',revision=0,playbackGeneration=0,selectedAssetId=null,dirty=false,localVideoUrl;
 const emptyTimeline=$('timeline').innerHTML;
 function markDirty(){dirty=true;$('dirty-status').hidden=false;$('timeline-state').textContent='수정 후 반영해 주세요';}
-function resetDirty(){dirty=false;$('dirty-status').hidden=true;$('timeline-state').textContent='대사 · 효과음 · 배경음';}
+function resetDirty(){dirty=false;$('dirty-status').hidden=true;$('timeline-state').textContent='효과음 · 배경음';}
 function updateTransport(){const v=$('preview');$('time-display').textContent=formatTime(v.currentTime)+' / '+formatTime(result?.duration||manifest?.duration||v.duration);$('timeline-play').textContent=v.paused?'▶ 재생':'Ⅱ 일시 정지';}
 function formatTime(t){t=Number.isFinite(t)?Math.max(0,t):0;return String(Math.floor(t/60)).padStart(2,'0')+':'+String(Math.floor(t%60)).padStart(2,'0');}
 $('open-import').onclick=()=>{$('import-panel').hidden=false;$('import-panel').scrollIntoView({behavior:'smooth',block:'start'});$(useDialogue?'video-file':'aaf-file').focus({preventScroll:true});};
@@ -32,64 +32,24 @@ $('import-form').onsubmit=async e=>{
  try{
  const aaf=$('aaf-file').files[0],video=$('video-file').files[0],audio=[...$('audio-files').files];
  if(useDialogue&&jobId&&!manifest.video){
-  if(!video||video.size>200*1024*1024)throw Error('200MB 이하 참조 영상을 선택해 주세요.');
+  if(!video||video.size>500*1024*1024)throw Error('500MB 이하 참조 영상을 선택해 주세요.');
   status('정리한 대사에 참조 영상을 연결하고 있어요.');
   const r=await fetch(apiBase+'/api/studio/jobs/'+jobId+'/files?'+new URLSearchParams({role:'video',name:video.name}),{method:'POST',headers:apiToken?{Authorization:'Bearer '+apiToken}:{},body:video});const data=await r.json();if(!r.ok)throw Error(data.error);
   await request('jobs/'+jobId+'/attach-video');manifest=await waitJob();showRoles();$('import-panel').hidden=true;status('참조 영상을 연결했어요. 효과음·배경음 초안을 만들어 보세요.');return;
  }
- if(!aaf||!video)throw Error('AAF와 참조 영상을 선택해 주세요.');
- const files=[{file:aaf,role:'aaf'},{file:video,role:'video'},...audio.map(file=>({file,role:'audio'}))];
- if(video.size>200*1024*1024||files.reduce((s,x)=>s+x.file.size,0)>limits.bytes||files.length>64)throw Error(publicWorker?'영상 200MB·전체 400MB·파일 64개 이하여야 해요.':'영상은 200MB, 전체는 1GB, 파일은 64개 이하여야 해요.');
- if(publicWorker&&files.some(x=>x.role!=='video'&&x.file.size>100*1024*1024))throw Error('각 AAF·오디오는 100MB 이하여야 해요.');
- if(jobId){try{await request('jobs/'+jobId,null,'DELETE');}catch(e){if(!/만료|찾을 수 없/.test(e.message))throw e;}sessionStorage.removeItem('scenesound-studio-job');jobId=null;}
- manifest=null;result=null;stopPlayers();$('sound-edits').replaceChildren();selectAsset(null);resetDirty();$('timeline').innerHTML=emptyTimeline;$('roles-panel').hidden=true;$('result-panel').hidden=true;jobId=(await request('jobs')).id;sessionStorage.setItem('scenesound-studio-job',jobId);$('job-actions').hidden=false;selectedVideo=video;
+ if(!video)throw Error('참조 영상을 선택해 주세요.');
+ const files=[...(aaf?[{file:aaf,role:'aaf'}]:[]),{file:video,role:'video'},...audio.map(file=>({file,role:'audio'}))];
+ if(video.size>500*1024*1024||files.reduce((s,x)=>s+x.file.size,0)>limits.bytes||files.length>64)throw Error(publicWorker?'영상 500MB·전체 1GB·파일 64개 이하여야 해요.':'영상은 500MB, 전체는 1GB, 파일은 64개 이하여야 해요.');
+ if(publicWorker&&files.some(x=>x.role!=='video'&&x.file.size>250*1024*1024))throw Error('각 AAF·오디오는 250MB 이하여야 해요.');
+ if(jobId){try{await request('jobs/'+jobId,null,'DELETE');}catch(e){if(!/만료|찾을 수 없/.test(e.message))throw e;}sessionStorage.removeItem('scenesound-effects-job');jobId=null;}
+ manifest=null;result=null;stopPlayers();$('sound-edits').replaceChildren();selectAsset(null);resetDirty();$('timeline').innerHTML=emptyTimeline;$('roles-panel').hidden=true;$('result-panel').hidden=true;jobId=(await request('jobs')).id;sessionStorage.setItem('scenesound-effects-job',jobId);$('job-actions').hidden=false;selectedVideo=video;
  for(const [i,{file,role}]of files.entries()){
  status('파일 가져오는 중 · '+(i+1)+'/'+files.length+' · '+file.name);
  const r=await fetch(apiBase+'/api/studio/jobs/'+jobId+'/files?'+new URLSearchParams({role,name:file.name}),{method:'POST',headers:apiToken?{Authorization:'Bearer '+apiToken}:{},body:file});const d=await r.json();if(!r.ok)throw Error(d.error);
  }
- await request('jobs/'+jobId+'/inspect');manifest=await waitJob();showRoles();$('result-panel').hidden=true;status('AAF를 읽었어요. 대사로 보정할 트랙을 확인해 주세요.');$('roles-panel').scrollIntoView({behavior:'smooth',block:'start'});
+ await request('jobs/'+jobId+'/inspect');manifest=await waitJob();showRoles();$('result-panel').hidden=true;status('영상을 가져왔어요. 원본 소리를 유지하고 효과음·배경음을 배치해 보세요.');$('roles-panel').scrollIntoView({behavior:'smooth',block:'start'});
  }catch(e){error(e.message);}finally{busy(false);}
 };
-async function uploadRequest(body){const response=await fetch('/api/upload',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify(body),signal:AbortSignal.timeout(30000)});const data=await response.json();if(!response.ok)throw Error(data.error||'영상 전송을 진행하지 못했어요.');return data;}
-function putChunk(url,headers,chunk,onProgress){return new Promise((resolve,reject)=>{
-  const xhr=new XMLHttpRequest();xhr.open('PUT',url);xhr.timeout=180000;
-  Object.entries(headers).forEach(([key,value])=>xhr.setRequestHeader(key,value));
-  xhr.upload.onprogress=e=>{if(e.lengthComputable)onProgress(e.loaded);};
-  xhr.onload=()=>{const etag=xhr.getResponseHeader('ETag');if(xhr.status>=200&&xhr.status<300&&etag)resolve(etag.replaceAll('"',''));else reject(new Error('영상 전송을 확인하지 못했어요. 다시 시도해 주세요.'));};
-  xhr.onerror=()=>reject(new Error('영상 전송 서버에 연결하지 못했어요. 잠시 후 다시 시도해 주세요.'));
-  xhr.ontimeout=()=>reject(new Error('영상 전송 시간이 초과됐어요. 더 작은 파일이나 안정적인 연결로 다시 시도해 주세요.'));xhr.send(chunk);
-});}
-async function uploadVideo(file,duration){
-  const session=await uploadRequest({action:'create',size:file.size,duration,mimeType:({'video/mp4':'video/mp4','video/webm':'video/webm','video/quicktime':'video/quicktime'}[file.type]||(/\.mov$/i.test(file.name)?'video/quicktime':'video/mp4'))});
-  activeUpload=session.token;
-  try{sessionStorage.setItem('scenesound-pending-upload',activeUpload);}catch{}
-  for(let index=1;index<=session.totalChunks;index++){
-    let entry=session.urls?.find(u=>u.chunk_index===index);
-    if(!entry)entry=(await uploadRequest({action:'urls',token:activeUpload,index})).urls?.[0];
-    if(!entry?.url)throw new Error('영상 전송 주소를 확인하지 못했어요.');
-    const offset=(index-1)*session.chunkSize,chunk=file.slice(offset,Math.min(file.size,offset+session.chunkSize));
-    let proof;
-    for(let attempt=0;attempt<2;attempt++){
-      try{proof=await putChunk(entry.url,{...session.headers,'x-upload-permit':entry.permit},chunk,loaded=>{$('analysis-status').textContent='영상 업로드 중 · '+Math.min(100,Math.round((offset+loaded)/file.size*100))+'%';});break;}
-      catch(error){if(attempt===1)throw error;entry=(await uploadRequest({action:'urls',token:activeUpload,index})).urls[0];}
-    }
-    await uploadRequest({action:'report',token:activeUpload,index,proof});
-  }
-  $('analysis-status').textContent='업로드 완료 · 영상을 분석할 수 있도록 준비하고 있어요…';
-  for(let tries=0;tries<120;tries++){
-    const info=await uploadRequest({action:'status',token:activeUpload});
-    if(info.status==='ready')return info.analysisToken;
-    await new Promise(resolve=>setTimeout(resolve,3000));
-  }
-  throw new Error('영상 준비가 오래 걸리고 있어요. 잠시 후 다시 시도해 주세요.');
-}
-let activeUpload;
-async function cleanupUpload(){
-  let token=activeUpload;try{token=token||sessionStorage.getItem('scenesound-pending-upload');}catch{}
-  if(!token)return;
-  try{await uploadRequest({action:'delete',token});try{sessionStorage.removeItem('scenesound-pending-upload');}catch{}}catch{}
-  activeUpload=undefined;
-}
 $('process-button').onclick=async()=>{
  if(working||!manifest)return;if(!manifest.video){error('먼저 참조 영상을 연결해 주세요.');return;}busy(true);
  try{
@@ -199,7 +159,7 @@ function beginDrag(e,id,lane,block){
  const cancel=()=>{startField.value=initialStart;endField.value=initialEnd;updateAssetBlock(id);finish();};
  block.addEventListener('pointermove',move);block.addEventListener('pointerup',finish);block.addEventListener('pointercancel',cancel);
 }
-$('delete-job').onclick=async()=>{if(working)return;try{stopPlayers();$('preview').removeAttribute('src');$('preview').load();await request('jobs/'+jobId,null,'DELETE');sessionStorage.removeItem('scenesound-studio-job');jobId=null;manifest=null;result=null;$('roles-panel').hidden=true;$('result-panel').hidden=true;$('job-actions').hidden=true;$('import-form').reset();$('import-panel').hidden=false;$('preview').hidden=true;$('video-placeholder').hidden=false;$('viewer-state').textContent='파일을 기다리는 중';$('timeline').innerHTML=emptyTimeline;$('sound-edits').replaceChildren();selectedAssetId=null;selectAsset(null);resetDirty();busy(false);updateTransport();status('임시 작업 파일을 삭제했어요. 새 편집본을 선택해 주세요.');}catch(e){error(e.message);}};
+$('delete-job').onclick=async()=>{if(working)return;try{stopPlayers();$('preview').removeAttribute('src');$('preview').load();await request('jobs/'+jobId,null,'DELETE');sessionStorage.removeItem('scenesound-effects-job');jobId=null;manifest=null;result=null;$('roles-panel').hidden=true;$('result-panel').hidden=true;$('job-actions').hidden=true;$('import-form').reset();$('import-panel').hidden=false;$('preview').hidden=true;$('video-placeholder').hidden=false;$('viewer-state').textContent='파일을 기다리는 중';$('timeline').innerHTML=emptyTimeline;$('sound-edits').replaceChildren();selectedAssetId=null;selectAsset(null);resetDirty();busy(false);updateTransport();status('임시 작업 파일을 삭제했어요. 새 편집본을 선택해 주세요.');}catch(e){error(e.message);}};
 (async()=>{$('import-button').disabled=true;try{await configureServer();const info=await request('status',null,'GET');$('engine-status').textContent=info.ready?(publicWorker?'공개 처리 서버 연결됨 · 첫 연결은 서버가 깨어날 때까지 잠시 걸릴 수 있어요.':'로컬 처리 엔진 연결됨 · AAF와 오디오는 이 컴퓨터에서 처리해요.'):'처리 엔진을 설치해 주세요. README의 Studio 실행 안내를 확인하세요.';$('import-button').disabled=!info.ready;
- const stored=sessionStorage.getItem('scenesound-studio-job');if(stored){jobId=stored;const existing=await request('jobs/'+jobId,null,'GET');useDialogue=existing.dialogueReady===true;if(useDialogue){document.body.classList.add('has-dialogue');$('aaf-file').required=false;$('aaf-file').closest('label').hidden=true;$('audio-files').closest('details').hidden=true;$('import-button').textContent='참조 영상 연결';$('roles-panel').querySelector('h2').textContent='1단계 대사 정리 완료';$('import-panel').querySelector('h2').textContent='참조 영상 추가';$('video-placeholder').querySelector('.note').textContent='정리한 대사에 맞는 참조 영상을 추가해 주세요.';$('process-button').textContent='효과음·배경음 분석하고 배치';}if(existing.manifest){manifest=existing.manifest;showRoles();for(const t of manifest.tracks){if(existing.settings?.roles?.[t.id])$('role-'+t.id).value=existing.settings.roles[t.id];}if(existing.settings)$('clean').checked=existing.settings.clean;if(useDialogue&&!manifest.video)$('import-panel').hidden=false;}if(existing.status==='processing'){busy(true);const data=await waitJob();if(data.mode!=='dialogue'&&data.tracks?.[0]?.waveform){result=data;showResult();}else{manifest=data;showRoles();}busy(false);}else if(existing.data?.mode!=='dialogue'&&existing.data?.tracks?.[0]?.waveform){result=existing.data;showResult();}status('이전 작업을 복원했어요.');}
- }catch{sessionStorage.removeItem('scenesound-studio-job');jobId=null;manifest=null;result=null;stopPlayers();$('sound-edits').replaceChildren();selectAsset(null);resetDirty();$('timeline').innerHTML=emptyTimeline;$('roles-panel').hidden=true;$('result-panel').hidden=true;$('job-actions').hidden=true;try{const info=await request('status',null,'GET');busy(false);$('import-button').disabled=!info.ready;$('engine-status').textContent=info.ready?(publicWorker?'공개 서버 연결됨 · 이전 작업이 만료됐어요. 파일을 다시 선택해 주세요.':'로컬 처리 엔진 연결됨 · 이전 세션이 만료됐어요. 파일을 다시 선택해 주세요.'):'처리 엔진을 설치해 주세요.';}catch{$('engine-status').textContent=location.hostname==='127.0.0.1'?'로컬 처리 서버에서 열어 주세요. npm run dev → /studio.html':'공개 작업 서버에 연결하지 못했어요. 잠시 후 새로고침해 주세요.';}}})();
+ const stored=sessionStorage.getItem('scenesound-effects-job');if(stored){jobId=stored;const existing=await request('jobs/'+jobId,null,'GET');useDialogue=existing.dialogueReady===true;if(useDialogue){document.body.classList.add('has-dialogue');$('aaf-file').required=false;$('aaf-file').closest('label').hidden=true;$('audio-files').closest('details').hidden=true;$('import-button').textContent='참조 영상 연결';$('roles-panel').querySelector('h2').textContent='1단계 대사 정리 완료';$('import-panel').querySelector('h2').textContent='참조 영상 추가';$('video-placeholder').querySelector('.note').textContent='정리한 대사에 맞는 참조 영상을 추가해 주세요.';$('process-button').textContent='효과음·배경음 분석하고 배치';}if(existing.manifest){manifest=existing.manifest;showRoles();for(const t of manifest.tracks){if(existing.settings?.roles?.[t.id])$('role-'+t.id).value=existing.settings.roles[t.id];}if(existing.settings)$('clean').checked=existing.settings.clean;if(useDialogue&&!manifest.video)$('import-panel').hidden=false;}if(existing.status==='processing'){busy(true);const data=await waitJob();if(data.mode!=='dialogue'&&data.tracks?.[0]?.waveform){result=data;showResult();}else{manifest=data;showRoles();}busy(false);}else if(existing.data?.mode!=='dialogue'&&existing.data?.tracks?.[0]?.waveform){result=existing.data;showResult();}status('이전 작업을 복원했어요.');}
+ }catch{sessionStorage.removeItem('scenesound-effects-job');jobId=null;manifest=null;result=null;stopPlayers();$('sound-edits').replaceChildren();selectAsset(null);resetDirty();$('timeline').innerHTML=emptyTimeline;$('roles-panel').hidden=true;$('result-panel').hidden=true;$('job-actions').hidden=true;try{const info=await request('status',null,'GET');busy(false);$('import-button').disabled=!info.ready;$('engine-status').textContent=info.ready?(publicWorker?'공개 서버 연결됨 · 이전 작업이 만료됐어요. 파일을 다시 선택해 주세요.':'로컬 처리 엔진 연결됨 · 이전 세션이 만료됐어요. 파일을 다시 선택해 주세요.'):'처리 엔진을 설치해 주세요.';}catch{$('engine-status').textContent=location.hostname==='127.0.0.1'?'로컬 처리 서버에서 열어 주세요. npm run dev → /studio.html':'공개 작업 서버에 연결하지 못했어요. 잠시 후 새로고침해 주세요.';}}})();
