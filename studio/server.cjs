@@ -20,6 +20,8 @@ const ready=fs.mkdir(scratch,{recursive:true,mode:0o700}).then(async()=>{
   try{const uploads=JSON.parse(await fs.readFile(path.join(dir,'uploads.json'),'utf8'));const id=e.name.slice(4),job={id,dir,uploads,bytes:0,created:stat.mtimeMs,status:'uploading'};
    for(const u of uploads)job.bytes+=(await fs.stat(path.join(dir,u.file))).size;
    try{job.manifest=JSON.parse(await fs.readFile(path.join(dir,'manifest.json'),'utf8'));job.data=job.manifest;job.status='ready';}catch{}
+   job.dialogueReady=fss.existsSync(path.join(dir,'dialogue-approved.wav'));
+   if(job.dialogueReady)try{job.dialogueData=JSON.parse(await fs.readFile(path.join(dir,'dialogue-approved.json'),'utf8'));}catch{}
    try{job.settings=JSON.parse(await fs.readFile(path.join(dir,'settings.json'),'utf8'));}catch{}
    const renders=[];for(const name of await fs.readdir(dir))if(/^render-[0-9a-f]{32}$/.test(name))try{const data=JSON.parse(await fs.readFile(path.join(dir,name,'result.json'),'utf8'));renders.push({data,time:(await fs.stat(path.join(dir,name))).mtimeMs});}catch{}
    renders.sort((a,b)=>b.time-a.time);if(renders[0]){job.data=renders[0].data;job.status='ready';job.settings={...job.settings,assets:job.data.assets,warnings:job.data.warnings,summary:job.data.summary};}
@@ -31,9 +33,9 @@ const ready=fs.mkdir(scratch,{recursive:true,mode:0o700}).then(async()=>{
 function fail(status,message){return Object.assign(Error(message),{status});}
 async function json(req){let size=0,chunks=[];for await(const c of req){size+=c.length;if(size>128*1024)throw fail(413,'작업 설정이 너무 커요.');chunks.push(c);}try{return JSON.parse(Buffer.concat(chunks));}catch{throw fail(400,'작업 설정을 확인해 주세요.');}}
 function run(action,job){return new Promise((resolve,reject)=>{const child=spawn(python,[path.join(__dirname,'engine.py'),action,job.dir],{stdio:['ignore','pipe','pipe']});job.child=child;let data='',errors='';const timer=setTimeout(()=>child.kill('SIGKILL'),20*60*1000);child.stdout.on('data',c=>{data+=c;if(data.length>2e6)child.kill('SIGKILL');});child.stderr.on('data',c=>{errors=(errors+c).slice(-1000);});child.once('error',()=>{clearTimeout(timer);reject(Error('처리 엔진을 시작하지 못했어요. Python 환경과 FFmpeg를 확인해 주세요.'));});child.once('close',code=>{clearTimeout(timer);job.child=null;try{const output=JSON.parse(data);if(code||output.error)reject(Error(output.error||'처리를 완료하지 못했어요.'));else resolve(output);}catch{reject(Error('처리 엔진이 중단됐어요. 지원 형식이나 파일 크기를 확인해 주세요.'));}});});}
-async function renderJob(job){
+async function renderJob(job,action='render'){
  let result;
- try{result=await run('render',job);return result;}finally{
+ try{result=await run(action,job);return result;}finally{
   const keep=result?.renderDirectory||job.data?.renderDirectory;
   for(const name of await fs.readdir(job.dir))if(/^render-[0-9a-f]{32}$/.test(name)&&name!==keep)await fs.rm(path.join(job.dir,name),{recursive:true,force:true});
  }
@@ -59,13 +61,14 @@ async function place(job,sound,id,page=1){
 function validateSettings(job,body){
  const roles=body.roles||{};if(job.manifest.tracks.some(t=>!['dialogue','original','ignore'].includes(roles[t.id])))throw fail(400,'모든 원본 트랙의 역할을 지정해 주세요.');
  if(!job.manifest.tracks.some(t=>roles[t.id]!=='ignore'))throw fail(400,'원본 트랙을 하나 이상 사용해 주세요.');
- const gains={};for(const t of [...job.manifest.tracks,{id:'effect'},{id:'ambience'}]){const g=body.trackGains?.[t.id]??0;if(!Number.isFinite(g)||g< -60||g>6)throw fail(400,'트랙 음량을 확인해 주세요.');gains[t.id]=g;}
- return{roles,clean:body.clean!==false,trackGains:gains};
+ const gains={};for(const t of [...job.manifest.tracks,{id:'effect'},{id:'ambience'},{id:'dialogue'}]){const g=body.trackGains?.[t.id]??0;if(!Number.isFinite(g)||g< -60||g>6)throw fail(400,'트랙 음량을 확인해 주세요.');gains[t.id]=g;}
+ if(body.useDialogue&&!job.dialogueReady)throw fail(409,'먼저 대사 정리를 완료해 주세요.');
+ return{roles,clean:body.clean!==false,trackGains:gains,...(body.useDialogue?{useDialogue:true}:{})};
 }
 async function serveFile(req,res,job,name){
- const allowed=new Set([...(job.uploads.filter(u=>u.role==='video').map(u=>u.file)),...(job.data?.tracks||[]).flatMap(t=>[t.file,t.export]),'mix.wav','original.wav','analysis-reference.mp4','SceneSound.aaf','preview.mp4','credits.json','SceneSound.zip']);
+ const allowed=new Set([...(job.uploads.filter(u=>u.role==='video').map(u=>u.file)),...(job.data?.tracks||[]).flatMap(t=>[t.file,t.export]),'mix.wav','original.wav','dialogue-approved.wav','dialogue-original.wav','dialogue-approved.json','dialogue-report.json','analysis-reference.mp4','SceneSound.aaf','preview.mp4','credits.json','SceneSound.zip']);
  if(!allowed.has(name)||name!==path.basename(name)||job.busy)throw fail(404,'파일을 찾을 수 없거나 처리 중이에요.');
- const upload=name==='analysis-reference.mp4'||job.uploads.some(u=>u.role==='video'&&u.file===name);const p=path.join(job.dir,...(!upload&&job.data?.renderDirectory?[job.data.renderDirectory]:[]),name);const stat=await fs.stat(p);let start=0,end=stat.size-1;
+ const upload=['dialogue-approved.wav','dialogue-original.wav','dialogue-approved.json','analysis-reference.mp4'].includes(name)||job.uploads.some(u=>u.role==='video'&&u.file===name);const p=path.join(job.dir,...(!upload&&job.data?.renderDirectory?[job.data.renderDirectory]:[]),name);const stat=await fs.stat(p);let start=0,end=stat.size-1;
  if(req.headers.range){const m=/^bytes=(\d+)-(\d*)$/.exec(req.headers.range);if(!m)throw fail(416,'재생 범위를 확인해 주세요.');start=Number(m[1]);end=m[2]?Math.min(Number(m[2]),end):end;if(start>end||start>=stat.size)throw fail(416,'재생 범위를 확인해 주세요.');res.statusCode=206;res.setHeader('Content-Range',`bytes ${start}-${end}/${stat.size}`);}
  res.setHeader('Accept-Ranges','bytes');res.setHeader('Content-Length',end-start+1);res.setHeader('Content-Type',name.endsWith('.wav')?'audio/wav':/\.(mp4|mov|webm)$/.test(name)?(name.endsWith('.webm')?'video/webm':'video/mp4'):name.endsWith('.json')?'application/json':'application/octet-stream');if(/\.(zip|aaf)$/.test(name)||new URL(req.url,'http://worker').searchParams.get('download')==='1')res.setHeader('Content-Disposition',`attachment; filename="${name}"`);fss.createReadStream(p,{start,end}).pipe(res);
 }
@@ -79,7 +82,7 @@ module.exports=async(req,res)=>{
   if(origin&&origin!==allowedOrigin)throw fail(403,'허용되지 않은 요청이에요.');
   if(origin===allowedOrigin){res.setHeader('Access-Control-Allow-Origin',allowedOrigin);res.setHeader('Vary','Origin');res.setHeader('Access-Control-Allow-Headers','Authorization,Content-Type,Range');res.setHeader('Access-Control-Allow-Methods','GET,POST,DELETE,OPTIONS');res.setHeader('Access-Control-Expose-Headers','Content-Range,Content-Length,Accept-Ranges');}
   if(req.method==='OPTIONS'){res.statusCode=204;return res.end();}
-  if(url.pathname==='/api/studio/status'&&req.method==='GET')return res.json({ready:fss.existsSync(python),local:false,maxDuration,maxBytes});
+  if(url.pathname==='/api/studio/status'&&req.method==='GET')return res.json({ready:fss.existsSync(python),local:false,maxDuration,maxBytes,dialogueVersion:1});
   const token=(req.headers.authorization||'').replace(/^Bearer /,'');identity=auth.verify(token,'session');
   if(!identity&&req.method==='GET'&&url.pathname.includes('/files/'))identity=auth.verify(url.searchParams.get('ticket'),'media');
   if(!identity)throw fail(401,'작업 권한이 만료됐어요. 화면을 다시 열어 주세요.');
@@ -87,7 +90,7 @@ module.exports=async(req,res)=>{
   const host=req.headers.host||'';if(!/^127\.0\.0\.1:8001$/.test(host))throw fail(403,'로컬 처리 서버에서만 사용할 수 있어요.');
   if(req.headers.origin&&req.headers.origin!=='http://127.0.0.1:8001')throw fail(403,'허용되지 않은 요청이에요.');
   if(['cross-site','same-site'].includes(req.headers['sec-fetch-site']))throw fail(403,'허용되지 않은 요청이에요.');
-  if(url.pathname==='/api/studio/status'&&req.method==='GET')return res.json({ready:fss.existsSync(python),local:true,maxDuration,maxBytes});
+  if(url.pathname==='/api/studio/status'&&req.method==='GET')return res.json({ready:fss.existsSync(python),local:true,maxDuration,maxBytes,dialogueVersion:1});
  }
  if(url.pathname==='/api/studio/jobs'&&req.method==='POST'){
   for(const [id,j]of jobs)if(!j.busy&&Date.now()-j.created>lifetime){await fs.rm(j.dir,{recursive:true,force:true});jobs.delete(id);}
@@ -97,14 +100,14 @@ module.exports=async(req,res)=>{
   const id=randomUUID(),dir=path.join(scratch,'job-'+id);await fs.mkdir(dir,{mode:0o700});const job={id,dir,uploads:[],bytes:0,created:Date.now(),status:'uploading',owner:identity?.sid};if(publicMode)await fs.writeFile(path.join(dir,'owner.json'),JSON.stringify({sid:identity.sid}));jobs.set(id,job);return res.json({id});
  }
  const match=/^\/api\/studio\/jobs\/([0-9a-f-]{36})(?:\/(.*))?$/.exec(url.pathname);if(!match)throw fail(404,'작업을 찾을 수 없어요.');const job=jobs.get(match[1]);if(!job)throw fail(404,'작업이 만료됐어요. 파일을 다시 선택해 주세요.');if(publicMode&&(job.owner!==identity.sid||(identity.kind==='media'&&identity.jid!==job.id)))throw fail(403,'이 작업에 접근할 수 없어요.');const action=match[2]||'';
- if(req.method==='GET'&&!action)return res.json({...(publicMode?{ticket:auth.ticket(identity.sid,job.id)}:{}),id:job.id,status:job.status,error:job.error,data:job.data,manifest:job.manifest,settings:job.settings?{roles:job.settings.roles,clean:job.settings.clean}:undefined,stage:job.stage});
+ if(req.method==='GET'&&!action)return res.json({...(publicMode?{ticket:auth.ticket(identity.sid,job.id)}:{}),id:job.id,status:job.status,error:job.error,data:job.data,manifest:job.manifest,dialogueReady:!!job.dialogueReady,dialogue:job.dialogueData,settings:job.settings?{roles:job.settings.roles,clean:job.settings.clean,deduplicate:job.settings.deduplicate,useDialogue:job.settings.useDialogue}:undefined,stage:job.stage});
  if(req.method==='GET'&&action.startsWith('files/'))return await serveFile(req,res,job,action.slice(6));
  if(req.method==='DELETE'&&!action){if(job.busy)throw fail(409,'처리 완료 후 삭제해 주세요.');await fs.rm(job.dir,{recursive:true,force:true});jobs.delete(job.id);return res.json({deleted:true});}
  if(req.method!=='POST')throw fail(405,'지원하지 않는 요청이에요.');
  if(job.busy||job.uploading)throw fail(409,'현재 작업이 끝난 뒤 다시 눌러 주세요.');
  if(action==='files'){
-  if(job.manifest)throw fail(409,'이미 읽은 프로젝트예요. 새 작업으로 시작해 주세요.');
   const role=url.searchParams.get('role'),name=(url.searchParams.get('name')||'').normalize('NFC');const ext=path.extname(name).toLowerCase();
+  if(job.manifest&&!(role==='video'&&!job.manifest.video))throw fail(409,'이미 읽은 프로젝트예요. 새 작업으로 시작해 주세요.');
   const extensions={aaf:['.aaf'],video:['.mp4','.mov','.webm'],audio:['.wav','.aif','.aiff','.mp3','.m4a']};
   if(!extensions[role]?.includes(ext)||name.length>250||/[\x00-\x1f/\\]/.test(name)||job.uploads.length>=64)throw fail(400,'파일 이름과 형식·개수를 확인해 주세요.');
   if(role!=='audio'&&job.uploads.some(u=>u.role===role))throw fail(400,'AAF와 참조 영상은 각각 하나만 넣어 주세요.');
@@ -114,7 +117,12 @@ module.exports=async(req,res)=>{
  }
  if(action==='inspect'){await mutate(job,async()=>{job.stage='AAF의 트랙·클립·연결 오디오를 읽고 있어요.';job.manifest=await run('inspect',job);return job.manifest;});return res.status(202).json({started:true});}
  if(!job.manifest)throw fail(409,'먼저 AAF를 읽어 주세요.');
+ if(action==='attach-video'){await mutate(job,async()=>{job.stage='참조 영상을 연결하고 있어요.';job.manifest=await run('attach-video',job);return job.manifest;});return res.status(202).json({started:true});}
  const body=await json(req);
+ if(action==='dialogue'){
+  const config=validateSettings(job,body);if(!Object.values(config.roles).includes('dialogue'))throw fail(400,'대사 트랙을 하나 이상 선택해 주세요.');
+  await mutate(job,async()=>{job.stage='동일한 대사 중복을 정리하고 전체 −24 LUFS를 측정·보정하고 있어요.';job.settings={...config,deduplicate:body.deduplicate!==false,assets:[]};await fs.writeFile(path.join(job.dir,'settings.json'),JSON.stringify(job.settings));const result=await renderJob(job,'dialogue');job.dialogueReady=true;job.dialogueData=result;return result;});return res.status(202).json({started:true});
+ }
  if(action==='prepare-analysis'){const config=validateSettings(job,body);await mutate(job,async()=>{job.stage='선택한 AAF 트랙을 참조 영상에 맞춰 분석용 영상을 만들고 있어요.';await fs.writeFile(path.join(job.dir,'settings.json'),JSON.stringify(config));return await run('prepare',job);});return res.status(202).json({started:true});}
  if(action==='render'){
   const config=validateSettings(job,body),plan=validatePlan(body.plan,Math.min(maxDuration,job.manifest.duration));

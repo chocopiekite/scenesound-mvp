@@ -90,6 +90,76 @@ class EngineTests(unittest.TestCase):
             self.assertEqual(len(again['tracks']), 2)
             self.assertEqual(again['tracks'][0]['clips'][0]['duration'], 8)
 
+    def test_dialogue_aaf_only_dedup_loudness_and_handoff(self):
+        import dialogue
+        with tempfile.TemporaryDirectory(prefix='scenesound-dialogue-test-') as d:
+            root = Path(d)
+            fixture(root)
+            with aaf2.open(str(root / 'edit.aaf'), 'rw') as f:
+                comp = next(f.content.toplevel())
+                original = comp.slots[0]
+                duplicate = comp.create_sound_slot(48000)
+                duplicate.name = 'DX duplicate'
+                duplicate.segment = original.segment.copy()
+            uploads = json.loads((root / 'uploads.json').read_text())
+            engine.save(root / 'uploads.json', [u for u in uploads if u['role'] != 'video'])
+            m = engine.inspect_job(root)
+            self.assertIsNone(m['video'])
+            self.assertEqual(m['duration'], 8)
+            settings = {'roles': {t['id']: 'dialogue' for t in m['tracks']}, 'clean': True, 'deduplicate': True}
+            engine.save(root / 'settings.json', settings)
+            r = dialogue.render_dialogue(root, engine)
+            self.assertEqual(len(r['report']['duplicates']), 2)
+            self.assertEqual(r['report']['removedDuplicateTracks'], 1)
+            self.assertTrue(r['report']['targetReached'], r['report'])
+            out = root / r['renderDirectory']
+            after = dialogue.measure(engine, out / 'mix.wav')
+            self.assertAlmostEqual(after['input_i'], -24, delta=.5)
+            with wave.open(str(out / 'mix.wav')) as w:
+                self.assertEqual(w.getnframes(), 8 * 48000)
+                self.assertEqual(w.getnchannels(), 2)
+                w.setpos(3 * 48000)
+                self.assertEqual(set(w.readframes(4800)), {0})
+            self.assertTrue((root / 'dialogue-approved.wav').exists())
+            # Disabling duplicate removal restores both original tracks.
+            settings['deduplicate'] = False
+            engine.save(root / 'settings.json', settings)
+            restored = dialogue.render_dialogue(root, engine)
+            self.assertEqual(len(restored['report']['duplicates']), 0)
+            self.assertEqual(len(restored['tracks']), 2)
+            # Real video attachment and effects hand-off preserve the approved dialogue bus.
+            engine.save(root / 'uploads.json', uploads)
+            engine.attach_video(root)
+            settings.update(useDialogue=True, assets=[], trackGains={})
+            engine.save(root / 'settings.json', settings)
+            prepared = engine.prepare_analysis(root)
+            self.assertEqual(prepared['analysisVideo'], 'analysis-reference.mp4')
+            mixed = engine.render(root)
+            stem = root / mixed['renderDirectory'] / 'dialogue-export.wav'
+            self.assertAlmostEqual(dialogue.measure(engine, stem)['input_i'], -24, delta=.5)
+
+    def test_overlapping_different_pcm_is_not_duplicate(self):
+        import dialogue
+        with tempfile.TemporaryDirectory(prefix='scenesound-dialogue-overlap-') as d:
+            root = Path(d)
+            fixture(root)
+            m = engine.inspect_job(root)
+            first = m['tracks'][0]
+            # Same position and length, different recording section: keep both.
+            second = {'id': 't1', 'name': 'DX different mic', 'role': 'dialogue', 'clips': [{**first['clips'][0], 'sourceStart': 4}]}
+            m['tracks'].append(second)
+            engine.save(root / 'manifest.json', m)
+            engine.save(root / 'settings.json', {'roles': {'t0': 'dialogue', 't1': 'dialogue'}, 'clean': False})
+            r = dialogue.render_dialogue(root, engine)
+            self.assertEqual(r['report']['duplicates'], [])
+            self.assertEqual(len(r['tracks']), 2)
+            # Silence must fail explicitly rather than claim a successful -24 LUFS result.
+            with wave.open(str(root / first['clips'][0]['file']), 'wb') as w:
+                w.setparams((1, 2, 48000, 0, 'NONE', 'not compressed'))
+                w.writeframes(bytes(8 * 48000 * 2))
+            with self.assertRaisesRegex(ValueError, '측정 가능한'):
+                dialogue.render_dialogue(root, engine)
+
     def test_linked_media_requires_explicit_upload(self):
         with tempfile.TemporaryDirectory(prefix='scenesound-linked-') as d:
             root = Path(d)

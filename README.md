@@ -2,7 +2,7 @@
 
 ## 공개 Studio 연결 (2026-10-27)
 
-- 화면: https://scenesound-mvp.vercel.app/studio.html . 홈페이지에서 바로 트랙 편집 화면으로 진입합니다. 기존 영상 추천·신청 기능도 유지합니다.
+- 화면: https://scenesound-mvp.vercel.app/studio.html . 홈페이지는 대사 전용 1단계입니다. AAF만 업로드해 정확한 중복을 제외하고 전체 −24 LUFS 보정 후 원본과 비교합니다. 효과음·배경음은 `/studio.html`에서 참조 영상을 추가해 이어갑니다. 기존 영상 추천·신청 기능도 유지합니다.
 - 작업 서버: Render Free, Singapore, Docker (`studio/Dockerfile`). https://scenesound-studio-worker.onrender.com . `/healthz`는 상태 확인용입니다.
 - Vercel Secret `STUDIO_WORKER_SECRET`과 Config `STUDIO_WORKER_URL`, Render Secret `STUDIO_WORKER_SECRET` 및 `STUDIO_ALLOWED_ORIGIN`으로 연결합니다. 비밀 값은 문서·소스에 넣지 않습니다.
 - Vercel은 HttpOnly/Secure 쿠키로 익명 브라우저 ID를 유지하며 2시간짜리 서명 권한을 발급합니다. Render API는 서명과 작업 소유자를 검사합니다. 음원·결과 미디어는 해당 작업의 1시간짜리 읽기 전용 서명 URL로 제공합니다. 다른 방문자의 작업 조회·변경·삭제는 거절합니다. 회원가입·결제는 없습니다.
@@ -90,3 +90,7 @@ Vercel Git 연동으로 main push 시 자동 배포합니다. API를 포함하�
 - Pixabay 공식 공개 API는 이미지·영상용으로 안내되고 효과음 검색 API는 확인되지 않았습니다: https://pixabay.com/api/docs/ . K-Sound도 조사한 공식 자료에서 공개 검색 API를 확인하지 못했습니다. 외부 음원을 수집하거나 재호스팅하지 않습니다.
 - 각 소리에 `Pixabay·K-Sound에서도 찾아보기`를 제공해 원본 사이트의 검색 결과를 새 탭에서 엽니다. K-Sound 한국어 검색어는 수정 가능하며 로그인·미리 듣기·다운로드·이용 조건 확인은 원본 사이트에서 진행합니다.
 - K-Sound 이용 조건: https://www.k-soundlibrary.kr/cop/bbs/selectFaq.do . FAQ에 출처 표기·재배포 제한 등 서로 다른 안내가 있으므로 특정 음원의 사용 조건을 확인해야 합니다.
+
+### 대사 정리
+
+`/` 또는 `/dialogue.html`에서 PCM AAF(연결형이면 원본 오디오도 함께)를 넣고 대사 트랙을 확인합니다. 같은 위치·길이·PCM의 중복만 제외하며 원본은 보존합니다. 전체 버스 −24 LUFS 목표, 최대 true peak −2 dBTP, 실측 허용 오차 ±0.5 LU를 표시합니다. 무음·미측정 파일은 목표 도달로 표시하지 않습니다. 대사 보정 WAV와 원본 믹스 WAV·처리 내역을 내려받을 수 있습니다. 이 단계는 외부 AI/음원 API를 쓰지 않습니다.

@@ -57,15 +57,11 @@ def inspect_job(root):
     uploads = json.loads((root / 'uploads.json').read_text())
     aafs = [u for u in uploads if u['role'] == 'aaf']
     videos = [u for u in uploads if u['role'] == 'video']
-    if len(aafs) != 1 or len(videos) != 1:
-        raise ValueError('AAF 1개와 참조 영상 1개를 선택해 주세요.')
-    video_info, video_duration = probe(root / videos[0]['file'])
-    video_stream = next((s for s in video_info.get('streams', []) if s.get('codec_type') == 'video'), {})
-    width, height = video_stream.get('width', 0), video_stream.get('height', 0)
-    if min(width, height) < 360 or max(width, height) / max(1, min(width, height)) > 2.4:
-        raise ValueError('영상 가로·세로는 각각 360픽셀 이상, 화면 비율은 2.4:1 이내여야 해요.')
-    if not video_stream or video_duration > MAX_DURATION:
-        raise ValueError('참조 영상은 %d분 이하의 영상이어야 해요.' % (MAX_DURATION // 60))
+    if len(aafs) != 1 or len(videos) > 1:
+        raise ValueError('AAF 1개를 선택해 주세요. 참조 영상은 선택 사항이에요.')
+    video_duration = None
+    if videos:
+        video_duration = validate_video(root / videos[0]['file'])
     linked = {}
     for u in uploads:
         if u['role'] == 'audio':
@@ -74,6 +70,8 @@ def inspect_job(root):
                 raise ValueError('같은 이름의 연결 오디오가 두 개 있어요. 파일 이름을 구분해 주세요.')
             linked[key] = u['file']
     tracks, warnings, extracted, clip_count = [], [], {}, [0]
+    timeline_duration = 0
+    empty_tracks = 0
     with aaf2.open(str(root / aafs[0]['file']), 'r') as f:
         comps = list(f.content.toplevel())
         if len(comps) != 1:
@@ -162,6 +160,9 @@ def inspect_job(root):
             flatten(slot.segment, rate, Fraction(0), duration, Fraction(0), clips)
             if len(clips) > 96:
                 raise ValueError('한 트랙에 오디오 클립은 96개까지 지원해요.')
+            timeline_duration = max(timeline_duration, float(duration))
+            if not clips:
+                empty_tracks += 1
             if clips:
                 name = str(slot.name or '오디오 %d' % slot.slot_id)[:100]
                 role = 'dialogue' if re.search(r'dialog|dx|대사|voice|vo|speech', name, re.I) else 'original'
@@ -171,14 +172,36 @@ def inspect_job(root):
         if sum(c['duration'] for t in tracks for c in t['clips']) > MAX_SECONDS:
             raise ValueError('오디오 트랙의 사용 구간 합계는 %d분 이하여야 해요.' % (MAX_SECONDS // 60))
         end = max(c['start'] + c['duration'] for t in tracks for c in t['clips'])
-        if end > video_duration + 0.1:
+        if video_duration is not None and end > video_duration + 0.1:
             raise ValueError('AAF가 참조 영상보다 길어요. 영상 첫 프레임과 AAF 시작점을 맞춰 주세요.')
-        if video_duration - end > 1:
+        if video_duration is not None and video_duration - end > 1:
             warnings.append('AAF 오디오가 영상보다 짧아요. 뒤쪽 구간은 무음으로 유지합니다.')
         warnings.append('현재 버전은 PCM AAF의 컷·빈 구간을 읽어요. 자동 대사 인식·화자 분리와 고도 왜곡 복원은 포함하지 않아요. 대사 트랙을 확인해 주세요.')
-        result = {'name': str(comp.name or 'SceneSound')[:100], 'duration': video_duration, 'video': videos[0]['file'], 'tracks': tracks, 'warnings': warnings}
+        result = {'name': str(comp.name or 'SceneSound')[:100], 'duration': video_duration or timeline_duration, 'video': videos[0]['file'] if videos else None, 'tracks': tracks, 'emptyTracks': empty_tracks, 'warnings': warnings}
     save(root / 'manifest.json', result)
     return result
+
+
+def validate_video(path):
+    info, duration = probe(path)
+    stream = next((s for s in info.get('streams', []) if s.get('codec_type') == 'video'), {})
+    width, height = stream.get('width', 0), stream.get('height', 0)
+    if not stream or duration > MAX_DURATION or min(width, height) < 360 or max(width, height) / max(1, min(width, height)) > 2.4:
+        raise ValueError('영상은 %d분 이하, 가로·세로 각각 360픽셀 이상, 비율 2.4:1 이내여야 해요.' % (MAX_DURATION // 60))
+    return duration
+
+
+def attach_video(root):
+    manifest = json.loads((root / 'manifest.json').read_text())
+    videos = [u for u in json.loads((root / 'uploads.json').read_text()) if u['role'] == 'video']
+    if len(videos) != 1:
+        raise ValueError('참조 영상을 하나 선택해 주세요.')
+    duration = validate_video(root / videos[0]['file'])
+    if duration + .1 < manifest['duration']:
+        raise ValueError('영상이 AAF보다 짧아요. 시작점과 길이를 맞춰 주세요.')
+    manifest.update(video=videos[0]['file'], duration=max(duration, manifest['duration']))
+    save(root / 'manifest.json', manifest)
+    return manifest
 
 
 def mix(root, inputs, output, duration, duck=None):
@@ -220,14 +243,18 @@ def waveform(path, duration):
 def prepare_analysis(root):
     manifest = json.loads((root / 'manifest.json').read_text())
     settings = json.loads((root / 'settings.json').read_text())
+    if not manifest.get('video'):
+        raise ValueError('효과음·배경음 단계에서는 참조 영상이 필요해요.')
     inputs = []
-    for track in manifest['tracks']:
+    for track in ([] if settings.get('useDialogue') else manifest['tracks']):
         if settings['roles'].get(track['id']) == 'ignore':
             continue
         for i, clip in enumerate(track['clips']):
             name = 'analysis-%s-%d.wav' % (track['id'], i)
             ff('-ss', clip['sourceStart'], '-i', root / clip['file'], '-t', clip['duration'], '-vn', '-ac', 2, '-ar', RATE, '-c:a', 'pcm_s16le', root / name)
             inputs.append({'file': name, 'start': clip['start']})
+    if settings.get('useDialogue'):
+        inputs = [{'file': 'dialogue-approved.wav'}]
     mix(root, inputs, 'analysis-original.wav', manifest['duration'])
     ff('-i', root / manifest['video'], '-i', root / 'analysis-original.wav', '-map', '0:v:0', '-map', '1:a:0', '-vf', 'scale=w=min(960\\,iw):h=min(960\\,ih):force_original_aspect_ratio=decrease:force_divisible_by=2', '-c:v', 'libx264', '-preset', 'ultrafast', '-crf', 26, '-maxrate', '1800k', '-bufsize', '3600k', '-c:a', 'aac', '-b:a', '128k', '-t', manifest['duration'], '-movflags', '+faststart', root / 'analysis-reference.mp4')
     return {**manifest, 'analysisVideo': 'analysis-reference.mp4'}
@@ -244,7 +271,7 @@ def render(root):
     warnings = list(manifest['warnings'])
     stems, originals, dialogue = [], [], []
     roles = settings['roles']
-    for track in manifest['tracks']:
+    for track in ([] if settings.get('useDialogue') else manifest['tracks']):
         role = roles.get(track['id'], 'original')
         if role == 'ignore':
             continue
@@ -275,6 +302,13 @@ def render(root):
         stems.append({'id': track['id'], 'name': track['name'], 'role': role, 'file': wetfile, 'gain': gain, 'clips': track['clips']})
         if role == 'dialogue':
             dialogue.append({'file': wetfile, 'gain': gain})
+    if settings.get('useDialogue'):
+        import shutil
+        for name in ['dialogue-approved.wav', 'dialogue-original.wav']:
+            shutil.copyfile(source_root / name, root / name)
+        stems.append({'id': 'dialogue', 'name': '정리된 대사 · −24 LUFS', 'role': 'dialogue', 'file': 'dialogue-approved.wav', 'gain': settings.get('trackGains', {}).get('dialogue', 0), 'clips': [{'start': 0, 'duration': duration}]})
+        originals.append({'file': 'dialogue-original.wav'})
+        dialogue.append({'file': 'dialogue-approved.wav'})
     if not stems:
         raise ValueError('사용할 원본 오디오 트랙을 하나 이상 골라 주세요.')
     mix(root, dialogue, 'dialogue-sidechain.wav', duration)
@@ -332,7 +366,8 @@ def main():
     root = Path(sys.argv[2]).resolve()
     action = sys.argv[1]
     try:
-        result = inspect_job(root) if action == 'inspect' else render(root) if action == 'render' else prepare_analysis(root) if action == 'prepare' else None
+        from dialogue import render_dialogue
+        result = render_dialogue(root, sys.modules[__name__]) if action == 'dialogue' else attach_video(root) if action == 'attach-video' else inspect_job(root) if action == 'inspect' else render(root) if action == 'render' else prepare_analysis(root) if action == 'prepare' else None
         if result is None:
             raise ValueError('지원하지 않는 작업이에요.')
         print(json.dumps(result, ensure_ascii=False))

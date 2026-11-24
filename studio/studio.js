@@ -2,13 +2,14 @@
 const $=id=>document.getElementById(id);
 let apiBase='',apiToken='',mediaTicket='',publicWorker=false,limits={duration:600,bytes:1024**3};
 async function configureServer(){if(location.hostname==='127.0.0.1')return;const r=await fetch('/api/studio-session',{cache:'no-store'});const data=await r.json();if(!r.ok)throw Error(data.error||'작업 서버 연결을 준비 중이에요.');const url=new URL(data.worker);if(url.protocol!=='https:'||!url.hostname.endsWith('.onrender.com'))throw Error('작업 서버 주소를 확인해 주세요.');apiBase=url.origin;apiToken=data.token;publicWorker=true;limits={duration:data.maxDuration,bytes:data.maxBytes};document.querySelector('header .badge').textContent='실제 자동 처리 · 공개 알파';$('upload-limits').textContent='5분 이하 · 영상 200MB · 각 AAF/오디오 100MB · 전체 400MB 이하. AAF와 영상의 시작점을 맞춰 주세요.';$('privacy-note').textContent='AAF·오디오·영상과 결과 파일은 Render 작업 서버의 임시 비공개 폴더에서 처리해요. 브라우저별 임시 권한으로 작업을 구분해요. 선택한 AAF 소리를 합친 분석용 영상은 Supabase 전송 서버를 거쳐 TwelveLabs로 전달되며 분석 후 삭제를 요청해요. 소리 검색어는 Freesound·Wikimedia Commons로 전달돼요. 재시작·연결 중단으로 파일이 사라지거나 외부 분석 파일이 남을 수 있어요.';$('retention-note').textContent='무료 서버는 잠들었다가 다시 켜질 수 있어요. 재시작·배포 시 임시 파일이 사라질 수 있으니 결과를 바로 내려받아 주세요. 완료 작업은 최대 24시간 보관하고 정리합니다.';}
+let useDialogue=false;
 let jobId,manifest,result,selectedVideo,working=false,players=[],originalPlayer,mode='wet',revision=0,playbackGeneration=0,selectedAssetId=null,dirty=false,localVideoUrl;
 const emptyTimeline=$('timeline').innerHTML;
 function markDirty(){dirty=true;$('dirty-status').hidden=false;$('timeline-state').textContent='수정 후 반영해 주세요';}
 function resetDirty(){dirty=false;$('dirty-status').hidden=true;$('timeline-state').textContent='대사 · 효과음 · 배경음';}
 function updateTransport(){const v=$('preview');$('time-display').textContent=formatTime(v.currentTime)+' / '+formatTime(result?.duration||manifest?.duration||v.duration);$('timeline-play').textContent=v.paused?'▶ 재생':'Ⅱ 일시 정지';}
 function formatTime(t){t=Number.isFinite(t)?Math.max(0,t):0;return String(Math.floor(t/60)).padStart(2,'0')+':'+String(Math.floor(t%60)).padStart(2,'0');}
-$('open-import').onclick=()=>{$('import-panel').hidden=false;$('import-panel').scrollIntoView({behavior:'smooth',block:'start'});$('aaf-file').focus({preventScroll:true});};
+$('open-import').onclick=()=>{$('import-panel').hidden=false;$('import-panel').scrollIntoView({behavior:'smooth',block:'start'});$(useDialogue?'video-file':'aaf-file').focus({preventScroll:true});};
 $('timeline-play').onclick=()=>{const v=$('preview');if(v.paused)v.play().catch(()=>error('영상을 재생하지 못했어요. 영상 재생 버튼을 다시 눌러 주세요.'));else v.pause();};
 $('timeline-zoom').oninput=()=>{$('timeline').style.width=(Number($('timeline-zoom').value)*100)+'%';};
 $('video-file').onchange=()=>{if(result)return;if(localVideoUrl)URL.revokeObjectURL(localVideoUrl);const file=$('video-file').files[0];if(!file)return;localVideoUrl=URL.createObjectURL(file);$('preview').src=localVideoUrl;$('preview').muted=false;$('preview').hidden=false;$('video-placeholder').hidden=true;$('viewer-state').textContent='참조 영상';$('timeline-play').disabled=false;};
@@ -25,11 +26,17 @@ function showRoles(){
  for(const track of manifest.tracks){const row=node('div',undefined,'track-role'),label=node('label',track.name+' · '+track.clips.length+'개 클립');const select=node('select');select.id='role-'+track.id;label.htmlFor=select.id;for(const [value,text]of [['dialogue','대사 · 잡음 감소와 레벨 보정'],['original','현장음·기존 소리 · 원본 유지'],['ignore','사용하지 않기']]){const option=node('option',text);option.value=value;select.append(option);}select.value=track.role;row.append(label,select);$('track-roles').append(row);}
  if(!result)drawTimeline();
 }
-function config(){return{roles:Object.fromEntries(manifest.tracks.map(t=>[t.id,$('role-'+t.id).value])),clean:$('clean').checked,trackGains:Object.fromEntries([...document.querySelectorAll('[data-track-gain]')].map(input=>[input.dataset.trackGain,Number(input.value)]))};}
+function config(){return{useDialogue,roles:Object.fromEntries(manifest.tracks.map(t=>[t.id,$('role-'+t.id).value])),clean:$('clean').checked,trackGains:Object.fromEntries([...document.querySelectorAll('[data-track-gain]')].map(input=>[input.dataset.trackGain,Number(input.value)]))};}
 $('import-form').onsubmit=async e=>{
  e.preventDefault();if(working)return;busy(true);
  try{
  const aaf=$('aaf-file').files[0],video=$('video-file').files[0],audio=[...$('audio-files').files];
+ if(useDialogue&&jobId&&!manifest.video){
+  if(!video||video.size>200*1024*1024)throw Error('200MB 이하 참조 영상을 선택해 주세요.');
+  status('정리한 대사에 참조 영상을 연결하고 있어요.');
+  const r=await fetch(apiBase+'/api/studio/jobs/'+jobId+'/files?'+new URLSearchParams({role:'video',name:video.name}),{method:'POST',headers:apiToken?{Authorization:'Bearer '+apiToken}:{},body:video});const data=await r.json();if(!r.ok)throw Error(data.error);
+  await request('jobs/'+jobId+'/attach-video');manifest=await waitJob();showRoles();$('import-panel').hidden=true;status('참조 영상을 연결했어요. 효과음·배경음 초안을 만들어 보세요.');return;
+ }
  if(!aaf||!video)throw Error('AAF와 참조 영상을 선택해 주세요.');
  const files=[{file:aaf,role:'aaf'},{file:video,role:'video'},...audio.map(file=>({file,role:'audio'}))];
  if(video.size>200*1024*1024||files.reduce((s,x)=>s+x.file.size,0)>limits.bytes||files.length>64)throw Error(publicWorker?'영상 200MB·전체 400MB·파일 64개 이하여야 해요.':'영상은 200MB, 전체는 1GB, 파일은 64개 이하여야 해요.');
@@ -84,7 +91,7 @@ async function cleanupUpload(){
   activeUpload=undefined;
 }
 $('process-button').onclick=async()=>{
- if(working||!manifest)return;busy(true);
+ if(working||!manifest)return;if(!manifest.video){error('먼저 참조 영상을 연결해 주세요.');return;}busy(true);
  try{
  const chosen=config();if(!Object.values(chosen.roles).some(r=>r!=='ignore'))throw Error('사용할 트랙을 하나 이상 골라 주세요.');
  if(!Object.values(chosen.roles).includes('dialogue')){status('대사 트랙이 지정되지 않아 클리닝과 대사 기반 덕킹은 적용하지 않아요.');}
@@ -129,7 +136,7 @@ function showResult(){
  resetDirty();drawTimeline();selectAsset(result.assets.some(a=>a.id===selectedAssetId)?selectedAssetId:null);
  $('warnings').replaceChildren();for(const text of result.warnings)$('warnings').append(node('li',text));
  for(const [id,name]of [['download-all','SceneSound.zip'],['download-mix','mix.wav'],['download-aaf','SceneSound.aaf'],['download-video','preview.mp4']]){$(id).href=fileUrl(name)+'&download=1';$(id).download=name;}
- $('timeline-hint').textContent='소리 블록을 선택해 수정하세요. 대사 원본 컷은 읽기 전용이에요. 수정 반영 후 재생·내보내기에 적용돼요.';
+ $('timeline-hint').textContent='효과음·배경음만 표시해요. 대사는 함께 재생되며 1단계에서 따로 확인할 수 있어요. 수정 반영 후 내보내기에 적용돼요.';
  for(const id of ['listen-wet','listen-dry','remix-button','timeline-play'])$(id).disabled=working;
  listen('wet');updateTransport();
 }
@@ -155,7 +162,7 @@ function waveform(peaks,color){
 function scrub(e,lane){if(!result||working)return;const r=lane.getBoundingClientRect();$('preview').currentTime=Math.max(0,Math.min(result.duration,(e.clientX-r.left)/r.width*result.duration));sync(true);}
 function drawTimeline(){
  const duration=result?.duration||manifest?.duration;if(!duration)return;
- const tracks=result?.tracks||manifest.tracks;$('timeline').replaceChildren();
+ const tracks=(result?.tracks||manifest.tracks).filter(t=>t.role==='effect'||t.role==='ambience');$('timeline').replaceChildren();
  const rulerRow=node('div',undefined,'ruler-row');rulerRow.append(node('span','TRACKS','ruler-label'));const ruler=node('div',undefined,'ruler');for(let i=0;i<=5;i++)ruler.append(node('span',formatTime(duration*i/5)));ruler.onclick=e=>scrub(e,ruler);rulerRow.append(ruler);$('timeline').append(rulerRow);
  const list=[...tracks];for(const role of ['effect','ambience'])if(!list.some(t=>t.role===role))list.push({id:role,name:role==='effect'?'효과음':'배경음',role,clips:[],empty:true});
  for(const t of list){
@@ -194,5 +201,5 @@ function beginDrag(e,id,lane,block){
 }
 $('delete-job').onclick=async()=>{if(working)return;try{stopPlayers();$('preview').removeAttribute('src');$('preview').load();await request('jobs/'+jobId,null,'DELETE');sessionStorage.removeItem('scenesound-studio-job');jobId=null;manifest=null;result=null;$('roles-panel').hidden=true;$('result-panel').hidden=true;$('job-actions').hidden=true;$('import-form').reset();$('import-panel').hidden=false;$('preview').hidden=true;$('video-placeholder').hidden=false;$('viewer-state').textContent='파일을 기다리는 중';$('timeline').innerHTML=emptyTimeline;$('sound-edits').replaceChildren();selectedAssetId=null;selectAsset(null);resetDirty();busy(false);updateTransport();status('임시 작업 파일을 삭제했어요. 새 편집본을 선택해 주세요.');}catch(e){error(e.message);}};
 (async()=>{$('import-button').disabled=true;try{await configureServer();const info=await request('status',null,'GET');$('engine-status').textContent=info.ready?(publicWorker?'공개 처리 서버 연결됨 · 첫 연결은 서버가 깨어날 때까지 잠시 걸릴 수 있어요.':'로컬 처리 엔진 연결됨 · AAF와 오디오는 이 컴퓨터에서 처리해요.'):'처리 엔진을 설치해 주세요. README의 Studio 실행 안내를 확인하세요.';$('import-button').disabled=!info.ready;
- const stored=sessionStorage.getItem('scenesound-studio-job');if(stored){jobId=stored;const existing=await request('jobs/'+jobId,null,'GET');if(existing.manifest){manifest=existing.manifest;showRoles();for(const t of manifest.tracks){if(existing.settings?.roles?.[t.id])$('role-'+t.id).value=existing.settings.roles[t.id];}if(existing.settings)$('clean').checked=existing.settings.clean;}if(existing.status==='processing'){busy(true);const data=await waitJob();if(data.tracks?.[0]?.waveform){result=data;showResult();}else{manifest=data;showRoles();}busy(false);}else if(existing.data?.tracks?.[0]?.waveform){result=existing.data;showResult();}status('이전 작업을 복원했어요.');}
+ const stored=sessionStorage.getItem('scenesound-studio-job');if(stored){jobId=stored;const existing=await request('jobs/'+jobId,null,'GET');useDialogue=existing.dialogueReady===true;if(useDialogue){document.body.classList.add('has-dialogue');$('aaf-file').required=false;$('aaf-file').closest('label').hidden=true;$('audio-files').closest('details').hidden=true;$('import-button').textContent='참조 영상 연결';$('roles-panel').querySelector('h2').textContent='1단계 대사 정리 완료';$('import-panel').querySelector('h2').textContent='참조 영상 추가';$('video-placeholder').querySelector('.note').textContent='정리한 대사에 맞는 참조 영상을 추가해 주세요.';$('process-button').textContent='효과음·배경음 분석하고 배치';}if(existing.manifest){manifest=existing.manifest;showRoles();for(const t of manifest.tracks){if(existing.settings?.roles?.[t.id])$('role-'+t.id).value=existing.settings.roles[t.id];}if(existing.settings)$('clean').checked=existing.settings.clean;if(useDialogue&&!manifest.video)$('import-panel').hidden=false;}if(existing.status==='processing'){busy(true);const data=await waitJob();if(data.mode!=='dialogue'&&data.tracks?.[0]?.waveform){result=data;showResult();}else{manifest=data;showRoles();}busy(false);}else if(existing.data?.mode!=='dialogue'&&existing.data?.tracks?.[0]?.waveform){result=existing.data;showResult();}status('이전 작업을 복원했어요.');}
  }catch{sessionStorage.removeItem('scenesound-studio-job');jobId=null;manifest=null;result=null;stopPlayers();$('sound-edits').replaceChildren();selectAsset(null);resetDirty();$('timeline').innerHTML=emptyTimeline;$('roles-panel').hidden=true;$('result-panel').hidden=true;$('job-actions').hidden=true;try{const info=await request('status',null,'GET');busy(false);$('import-button').disabled=!info.ready;$('engine-status').textContent=info.ready?(publicWorker?'공개 서버 연결됨 · 이전 작업이 만료됐어요. 파일을 다시 선택해 주세요.':'로컬 처리 엔진 연결됨 · 이전 세션이 만료됐어요. 파일을 다시 선택해 주세요.'):'처리 엔진을 설치해 주세요.';}catch{$('engine-status').textContent=location.hostname==='127.0.0.1'?'로컬 처리 서버에서 열어 주세요. npm run dev → /studio.html':'공개 작업 서버에 연결하지 못했어요. 잠시 후 새로고침해 주세요.';}}})();
