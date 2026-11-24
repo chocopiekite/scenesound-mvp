@@ -410,7 +410,7 @@ def render(root):
         import shutil
         for name in ['dialogue-approved.wav', 'dialogue-original.wav']:
             shutil.copyfile(source_root / name, root / name)
-        stems.append({'id': 'dialogue', 'name': '정리된 대사 · −24 LUFS', 'role': 'dialogue', 'file': 'dialogue-approved.wav', 'gain': settings.get('trackGains', {}).get('dialogue', 0), 'clips': [{'start': 0, 'duration': duration}]})
+        stems.append({'id': 'dialogue', 'name': '정리된 대사 · 클립별 보정', 'role': 'dialogue', 'file': 'dialogue-approved.wav', 'gain': settings.get('trackGains', {}).get('dialogue', 0), 'clips': [{'start': 0, 'duration': duration}]})
         originals.append({'file': 'dialogue-original.wav'})
         dialogue.append({'file': 'dialogue-approved.wav'})
     if not stems:

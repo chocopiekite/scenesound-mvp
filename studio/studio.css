@@ -6,3 +6,5 @@
 
 .has-dialogue #roles-panel>*:not(h2):not(#process-button){display:none}.has-dialogue #process-button{margin-top:20px}.has-dialogue #import-panel>.note{display:none}
 .scene-field{display:grid;grid-template-columns:140px minmax(0,1fr) auto;gap:14px;margin:16px 0;align-items:end}.scene-field input{width:100%;display:block;background:#111219;color:var(--ink);border:1px solid var(--line);padding:9px;border-radius:6px;margin-top:6px}.scene-field label{font-size:13px}@media(max-width:600px){.scene-field{grid-template-columns:100px minmax(0,1fr)}.scene-field button{grid-column:2;justify-self:end}}
+
+.clip-levels{display:grid;gap:10px;margin:16px 0}.clip-level{padding:14px;border:1px solid var(--line);border-radius:8px;word-break:keep-all;overflow-wrap:anywhere}.clip-level strong{font-size:14px}.clip-level p{font-size:13px;color:var(--muted);margin:7px 0 0}

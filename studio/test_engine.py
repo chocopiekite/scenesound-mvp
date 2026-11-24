@@ -111,10 +111,13 @@ class EngineTests(unittest.TestCase):
             r = dialogue.render_dialogue(root, engine)
             self.assertEqual(len(r['report']['duplicates']), 2)
             self.assertEqual(r['report']['removedDuplicateTracks'], 1)
-            self.assertTrue(r['report']['targetReached'], r['report'])
+            self.assertEqual(r['report']['normalizationMode'], 'clipStaticShortTerm')
+            self.assertEqual(r['report']['shortClipCount'], 2)
+            self.assertTrue(all(a['peakReached'] for a in r['report']['adjustments']))
             out = root / r['renderDirectory']
             after = dialogue.measure(engine, out / 'mix.wav')
-            self.assertAlmostEqual(after['input_i'], -24, delta=.5)
+            self.assertTrue(math.isfinite(after['input_i']))
+            self.assertGreater(r['report']['needsReview'], 0)  # sine crest cannot meet both targets
             with wave.open(str(out / 'mix.wav')) as w:
                 self.assertEqual(w.getnframes(), 8 * 48000)
                 self.assertEqual(w.getnchannels(), 2)
@@ -157,7 +160,38 @@ class EngineTests(unittest.TestCase):
             self.assertEqual(prepared['analysisVideo'], 'analysis-reference.mp4')
             mixed = engine.render(root)
             stem = root / mixed['renderDirectory'] / 'dialogue-export.wav'
-            self.assertAlmostEqual(dialogue.measure(engine, stem)['input_i'], -24, delta=.5)
+            self.assertAlmostEqual(dialogue.measure(engine, stem)['input_i'], restored['report']['afterLufs'], delta=.2)
+
+    def test_clip_static_shortterm_and_peak_constraints(self):
+        import dialogue
+        self.assertAlmostEqual(dialogue.clip_gain(-30, -18), 6)  # both met: -24 / -12
+        self.assertAlmostEqual(dialogue.clip_gain(-30, -10), 0)  # upper peak wins
+        self.assertAlmostEqual(dialogue.clip_gain(-30, -25), 10)  # lower peak wins
+        self.assertEqual(dialogue.clip_gain(None, None), 0)
+        with tempfile.TemporaryDirectory(prefix='scenesound-shortterm-') as d:
+            root = Path(d)
+            samples = [int(.07 * 32767 * math.sin(2 * math.pi * 330 * i / 48000)) for i in range(6 * 48000)]
+            # A short transient gives speech-like crest factor, unlike a plain sine.
+            samples[4 * 48000] = int(.15 * 32767)
+            with wave.open(str(root / 'voice.wav'), 'wb') as w:
+                w.setparams((1, 2, 48000, 0, 'NONE', 'not compressed'))
+                w.writeframes(array.array('h', samples).tobytes())
+            before = dialogue.clip_level(engine, root / 'voice.wav', 6)
+            self.assertEqual(before['metric'], 'shortTerm')
+            gain = dialogue.clip_gain(before['lufs'], before['truePeakDbtp'])
+            engine.ff('-i', root / 'voice.wav', '-af', 'volume=%fdB' % gain, '-c:a', 'pcm_f32le', root / 'leveled.wav')
+            after = dialogue.clip_level(engine, root / 'leveled.wav', 6)
+            self.assertAlmostEqual(after['lufs'], -24, delta=.2)
+            self.assertGreaterEqual(after['truePeakDbtp'], -15.15)
+            self.assertLessEqual(after['truePeakDbtp'], -9.85)
+            self.assertAlmostEqual(after['lufs'] - before['lufs'], gain, delta=.1)
+            # No invented short-term readings for files shorter than 3 seconds.
+            engine.ff('-i', root / 'voice.wav', '-t', 2, root / 'short.wav')
+            short = dialogue.clip_level(engine, root / 'short.wav', 2)
+            self.assertEqual(short['metric'], 'momentary')
+            self.assertIsNotNone(short['lufs'])
+            engine.ff('-i', root / 'voice.wav', '-t', .2, root / 'tiny.wav')
+            self.assertIsNone(dialogue.clip_level(engine, root / 'tiny.wav', .2)['lufs'])
 
     def test_overlapping_different_pcm_is_not_duplicate(self):
         import dialogue
