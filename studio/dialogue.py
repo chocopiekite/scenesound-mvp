@@ -82,7 +82,7 @@ def render_dialogue(source, engine):
                 duplicates.append({'track': track['name'], 'clip': i + 1, 'start': clip['start'], 'duration': clip['duration'], 'keptTrack': seen[key]})
                 continue
             seen[key] = track['name']
-            item = {'file': name, 'start': clip['start'], 'duration': clip['duration'], 'track': track['id'], 'clip': clip, 'level': measure(engine, root / name)}
+            item = {'file': name, 'start': clip['start'], 'duration': clip['duration'], 'track': track['id'], 'clip': clip}
             retained.append(item)
             clips.append(clip)
         if clips:
