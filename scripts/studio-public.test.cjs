@@ -17,7 +17,7 @@ test('public mode requires signed sessions and checks each job owner',async()=>{
 });
 test('public worker blocks other origins and provides exact CORS',async()=>{
  assert.equal((await call('/api/studio/status','GET',null,{origin:'https://evil.example'})).code,403);
- const status=await call('/api/studio/status');assert.equal(status.headers['Access-Control-Allow-Origin'],'https://scenesound-mvp.vercel.app');assert.equal(status.data.maxDuration,300);
+ const status=await call('/api/studio/status');assert.equal(status.headers['Access-Control-Allow-Origin'],'https://scenesound-mvp.vercel.app');assert.equal(status.data.maxDuration,1800);
 });
 test('token purposes and expiry cannot be exchanged',()=>{
  assert.equal(auth.verify(auth.sign({sid:A,kind:'session',exp:1}),'session'),null);
@@ -30,10 +30,25 @@ test('Vercel session refresh keeps the private browser identity and never return
  const cookie=headers['Set-Cookie'].split(';')[0];await sessionHandler({method:'GET',headers:{cookie}},res);assert.equal(auth.verify(data.token,'session').sid,first.sid);
 });
 test.after(()=>fs.rmSync(process.env.STUDIO_DATA_DIR,{recursive:true,force:true}));
-test('public uploads expose 1 GB total and reject oversize declared media before streaming',async()=>{
- const info=await call('/api/studio/status');assert.equal(info.data.maxBytes,1024**3);assert.equal(handler.uploadLimit('video'),500*1024**2);assert.equal(handler.uploadLimit('aaf'),250*1024**2);
+test('public uploads expose 6 GB total and reject oversize declared media before streaming',async()=>{
+ const info=await call('/api/studio/status');assert.equal(info.data.maxBytes,6*1024**3);assert.equal(handler.uploadLimit('video'),2*1024**3);assert.equal(handler.uploadLimit('aaf'),2*1024**3);
  const created=await call('/api/studio/jobs','POST',auth.session(A));const url='/api/studio/jobs/'+created.data.id;
- assert.equal((await call(url+'/files?role=video&name=test.mp4','POST',auth.session(A),{'content-length':String(500*1024**2+1)})).code,413);
- assert.equal((await call(url+'/files?role=aaf&name=test.aaf','POST',auth.session(A),{'content-length':String(250*1024**2+1)})).code,413);
+ assert.equal((await call(url+'/files?role=video&name=test.mp4','POST',auth.session(A),{'content-length':String(2*1024**3+1)})).code,413);
+ assert.equal((await call(url+'/files?role=aaf&name=test.aaf','POST',auth.session(A),{'content-length':String(2*1024**3+1)})).code,413);
  assert.equal((await call(url,'DELETE',auth.session(A))).code,200);
+});
+test('chunk uploads enforce owner, offsets, byte bounds and exactly-once completion',async()=>{
+ const {Readable}=require('node:stream');
+ const created=await call('/api/studio/jobs','POST',auth.session(A));const url='/api/studio/jobs/'+created.data.id;
+ async function streamCall(path,body,method='POST',who=A){let code=200,data;const bytes=Buffer.isBuffer(body)?body:Buffer.from(JSON.stringify(body));const req=Readable.from([bytes]);Object.assign(req,{url:path,method,headers:{host:'worker.onrender.com',origin:'https://scenesound-mvp.vercel.app',authorization:'Bearer '+auth.session(who),'content-length':String(bytes.length)}});const res={setHeader(){},status(c){code=c;return this;},json(d){data=d;}};await handler(req,res);return{code,data};}
+ try{const start=await streamCall(url+'/uploads',{role:'aaf',name:'test.aaf',size:6});assert.equal(start.code,200);const upload=url+'/uploads/'+start.data.id;
+ assert.equal((await streamCall(upload+'?offset=0',Buffer.from('abc'),'POST',B)).code,403);
+ assert.equal((await streamCall(upload+'?offset=1',Buffer.from('abc'))).code,409);
+ assert.equal((await streamCall(upload+'?offset=0',Buffer.from('abc'))).data.offset,3);
+ assert.equal((await call(upload,'GET',auth.session(A))).data.offset,3);
+ assert.equal((await streamCall(upload+'?offset=3',Buffer.from('defg'))).code,413);
+ assert.equal((await streamCall(upload+'?offset=3',Buffer.from('def'))).data.done,true);
+ assert.equal((await streamCall(upload+'?offset=3',Buffer.from('def'))).code,409);
+ const folder=path.join(process.env.STUDIO_DATA_DIR,'job-'+created.data.id),uploads=JSON.parse(fs.readFileSync(path.join(folder,'uploads.json')));assert.equal(uploads.length,1);assert.equal(fs.readFileSync(path.join(folder,uploads[0].file),'utf8'),'abcdef');
+ }finally{await call(url,'DELETE',auth.session(A));}
 });

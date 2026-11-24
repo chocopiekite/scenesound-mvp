@@ -87,13 +87,13 @@ def render_dialogue(source, engine):
             engine.ff('-ss', lo - item['start'], '-i', root / ('clean-%d.wav' % index), '-t', hi - lo,
                       '-af', 'afade=t=in:d=%f,afade=t=out:st=%f:d=%f' % (fade, hi - lo - fade, fade),
                       '-ar', 48000, '-ac', 2, '-c:a', 'pcm_f32le', root / name)
-            pieces.append({'file': name, 'start': lo})
+            pieces.append({'file': name, 'start': lo - start})
             clips.append({'start': lo, 'duration': hi - lo})
         if pieces:
             name = 'scene-%02d-pre.wav' % (i + 1)
-            engine.mix(root, pieces, name, duration, limit=False, codec='pcm_f32le')
-            stems.append({'id': 'scene-%02d' % (i + 1), 'name': scene['title'], 'role': 'dialogue', 'file': name, 'gain': 0, 'clips': clips})
-    engine.mix(root, [{'file': t['file']} for t in stems], 'dialogue-pre.wav', duration, limit=False, codec='pcm_f32le')
+            engine.mix(root, pieces, name, end - start, limit=False, codec='pcm_f32le')
+            stems.append({'id': 'scene-%02d' % (i + 1), 'name': scene['title'], 'role': 'dialogue', 'file': name, 'gain': 0, 'start': start, 'duration': end - start, 'clips': clips})
+    engine.mix(root, [{'file': t['file'], 'start': t['start']} for t in stems], 'dialogue-pre.wav', duration, limit=False, codec='pcm_f32le')
     before = measure(engine, root / 'original.wav')
     measured = measure(engine, root / 'dialogue-pre.wav')
     if not math.isfinite(measured['input_i']):
@@ -105,8 +105,8 @@ def render_dialogue(source, engine):
     for t in stems:
         t['export'] = t['id'] + '.wav'
         engine.ff('-i', root / t['file'], '-af', 'volume=%fdB' % gain, '-ar', 48000, '-ac', 2, '-c:a', 'pcm_s16le', root / t['export'])
-        t['waveform'] = engine.waveform(root / t['export'], duration)
-    engine.mix(root, [{'file': t['export']} for t in stems], 'mix.wav', duration, limit=False)
+        t['waveform'] = engine.waveform(root / t['export'], t['duration'])
+    engine.mix(root, [{'file': t['export'], 'start': t['start']} for t in stems], 'mix.wav', duration, limit=False)
     after = measure(engine, root / 'mix.wav')
     reached = math.isfinite(after['input_i']) and abs(after['input_i'] + 24) <= .5 and after['input_tp'] <= -1.8
     report = {'targetLufs': -24, 'beforeLufs': finite(before['input_i']), 'afterLufs': finite(after['input_i']), 'truePeakDbtp': finite(after['input_tp']), 'targetReached': reached, 'duplicates': duplicates, 'removedEmptyTracks': manifest.get('emptyTracks', 0), 'removedDuplicateTracks': len(selected) - len(cleaned_tracks), 'adjustments': adjustments, 'deduplicate': settings.get('deduplicate', True), 'scenes': scenes, 'sceneTracks': len(stems), 'busGainDb': round(gain, 2)}
@@ -127,7 +127,14 @@ def render_dialogue(source, engine):
             source_clip = mob.import_audio_essence(str(root / t['export']), edit_rate=48000)
             slot = comp.create_sound_slot(48000)
             slot.name = t['name']
-            slot.segment.components.append(mob.create_source_clip(source_clip.slot_id))
+            begin = round(t['start'] * 48000)
+            if begin:
+                slot.segment.components.append(f.create.Filler(media_kind='sound', length=begin))
+            clip = mob.create_source_clip(source_clip.slot_id)
+            slot.segment.components.append(clip)
+            end = round(duration * 48000) - begin - clip.length
+            if end > 0:
+                slot.segment.components.append(f.create.Filler(media_kind='sound', length=end))
             slot.segment.length = round(duration * 48000)
     result = {'mode': 'dialogue', 'renderDirectory': root.name, 'duration': duration, 'tracks': tracks, 'assets': [], 'report': report, 'warnings': warnings, 'summary': '대사 중복 정리와 전체 −24 LUFS 보정', 'files': ['mix.wav', 'original.wav', 'dialogue-report.json', 'SceneSound.aaf'] + [t['export'] for t in tracks]}
     engine.save(root / 'result.json', result)

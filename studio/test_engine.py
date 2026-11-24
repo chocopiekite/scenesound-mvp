@@ -53,7 +53,7 @@ class EngineTests(unittest.TestCase):
             manifest = engine.inspect_job(root)
             self.assertEqual(len(manifest['tracks']), 1)
             clips = manifest['tracks'][0]['clips']
-            self.assertEqual([(c['start'], c['duration'], c['sourceStart']) for c in clips], [(0, 2, 1), (4, 2, 4)])
+            self.assertEqual([(c['start'], c['duration'], c['sourceStart']) for c in clips], [(0, 2, 0), (4, 2, 0)])
             engine.save(root / 'settings.json', {'roles': {'t0': 'dialogue'}, 'clean': True, 'trackGains': {}, 'assets': [{'id': 's0', 'file': 'dialogue.wav', 'title': 'Test ambience', 'role': 'ambience', 'start': 0, 'end': 8, 'gain': -24, 'enabled': True}], 'warnings': [], 'summary': 'Synthetic test only'})
             prepared = engine.prepare_analysis(root)
             info, proxy_duration = engine.probe(root / prepared['analysisVideo'])
@@ -124,7 +124,11 @@ class EngineTests(unittest.TestCase):
             scene_samples = []
             for t in r['tracks']:
                 with wave.open(str(out / t['export'])) as w:
-                    scene_samples.append(array.array('h', w.readframes(w.getnframes())))
+                    samples = array.array('h', w.readframes(w.getnframes()))
+                    padded = array.array('h', [0]) * (8 * 48000 * 2)
+                    begin = round(t['start'] * 48000) * 2
+                    padded[begin:begin+len(samples)] = samples
+                    scene_samples.append(padded)
             with wave.open(str(out / 'mix.wav')) as w:
                 bus = array.array('h', w.readframes(w.getnframes()))
             self.assertLessEqual(max(abs(bus[i] - sum(s[i] for s in scene_samples)) for i in range(len(bus))), 2)
@@ -163,7 +167,7 @@ class EngineTests(unittest.TestCase):
             m = engine.inspect_job(root)
             first = m['tracks'][0]
             # Same position and length, different recording section: keep both.
-            second = {'id': 't1', 'name': 'DX different mic', 'role': 'dialogue', 'clips': [{**first['clips'][0], 'sourceStart': 4}]}
+            second = {'id': 't1', 'name': 'DX different mic', 'role': 'dialogue', 'clips': [{**first['clips'][0], 'file': 'dialogue.wav', 'sourceStart': 4}]}
             m['tracks'].append(second)
             engine.save(root / 'manifest.json', m)
             engine.save(root / 'settings.json', {'roles': {'t0': 'dialogue', 't1': 'dialogue'}, 'clean': False})
@@ -172,9 +176,10 @@ class EngineTests(unittest.TestCase):
             self.assertEqual(len(r['tracks']), 1)
             self.assertEqual(len(r['tracks'][0]['clips']), 3)
             # Silence must fail explicitly rather than claim a successful -24 LUFS result.
-            with wave.open(str(root / first['clips'][0]['file']), 'wb') as w:
-                w.setparams((1, 2, 48000, 0, 'NONE', 'not compressed'))
-                w.writeframes(bytes(8 * 48000 * 2))
+            for filename in {c['file'] for t in m['tracks'] for c in t['clips']}:
+                with wave.open(str(root / filename), 'wb') as w:
+                    w.setparams((1, 2, 48000, 0, 'NONE', 'not compressed'))
+                    w.writeframes(bytes(8 * 48000 * 2))
             with self.assertRaisesRegex(ValueError, '측정 가능한'):
                 dialogue.render_dialogue(root, engine)
 
@@ -189,6 +194,37 @@ class EngineTests(unittest.TestCase):
             engine.save(root / 'settings.json', {'roles': {'t0': 'original'}, 'clean': False, 'assets': [], 'trackGains': {}})
             r = engine.render(root)
             self.assertTrue((root / r['renderDirectory'] / 'preview.mp4').exists())
+
+    def test_long_embedded_source_extracts_only_used_region(self):
+        with tempfile.TemporaryDirectory(prefix='scenesound-long-source-') as d:
+            root = Path(d)
+            with wave.open(str(root / 'long.wav'), 'wb') as w:
+                w.setparams((1, 2, 48000, 0, 'NONE', 'not compressed'))
+                for i in range(720):
+                    w.writeframesraw(struct.pack('<h', 1234 if i >= 700 else 0) * 48000)
+            with aaf2.open(str(root / 'edit.aaf'), 'w') as f:
+                mob=f.create.MasterMob('DX long recording');f.content.mobs.append(mob)
+                src=mob.import_audio_essence(str(root / 'long.wav'),edit_rate=48000)
+                comp=f.create.CompositionMob('Long source short cut');comp.usage='Usage_TopLevel';f.content.mobs.append(comp)
+                slot=comp.create_sound_slot(48000);slot.name='DX';slot.segment.components.append(mob.create_source_clip(src.slot_id,start=700*48000,length=8*48000));slot.segment.length=8*48000
+            engine.save(root / 'uploads.json',[{'role':'aaf','file':'edit.aaf','name':'edit.aaf'}])
+            m=engine.inspect_job(root);c=m['tracks'][0]['clips'][0]
+            self.assertEqual(c['sourceStart'],0);self.assertEqual(c['originalSourceStart'],700)
+            self.assertLess((root / c['file']).stat().st_size,1024**2)
+            with wave.open(str(root / c['file'])) as w:
+                self.assertEqual(w.getnframes(),8*48000)
+                self.assertEqual(struct.unpack('<h',w.readframes(1))[0],1234)
+
+    def test_batched_mix_retains_timing_and_sample_sum(self):
+        with tempfile.TemporaryDirectory(prefix='scenesound-batch-mix-') as d:
+            root=Path(d);fixture(root)
+            items=[{'file':'dialogue.wav','start':0,'gain':-30} for _ in range(17)]
+            engine.mix(root,items,'batch.wav',8,limit=False)
+            engine.mix(root,[{'file':'dialogue.wav','gain':-30+20*math.log10(17)}],'single.wav',8,limit=False)
+            with wave.open(str(root / 'batch.wav')) as a, wave.open(str(root / 'single.wav')) as b:
+                av=array.array('h',a.readframes(a.getnframes()));bv=array.array('h',b.readframes(b.getnframes()))
+                self.assertLessEqual(max(abs(x-y) for x,y in zip(av,bv)),2)
+            self.assertEqual(list(root.glob('batch-*.wav')),[])
 
     def test_linked_media_requires_explicit_upload(self):
         with tempfile.TemporaryDirectory(prefix='scenesound-linked-') as d:

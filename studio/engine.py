@@ -16,15 +16,17 @@ from fractions import Fraction
 import aaf2
 
 RATE = 48000
-MAX_DURATION = int(os.environ.get('STUDIO_MAX_DURATION', 600))
-MAX_TRACKS = int(os.environ.get('STUDIO_MAX_TRACKS', 24))
-MAX_CLIPS = int(os.environ.get('STUDIO_MAX_CLIPS', 256))
-MAX_SECONDS = int(os.environ.get('STUDIO_MAX_SECONDS', 3600))
+MAX_DURATION = int(os.environ.get('STUDIO_MAX_DURATION', 1800))
+MAX_TRACKS = int(os.environ.get('STUDIO_MAX_TRACKS', 32))
+MAX_CLIPS = int(os.environ.get('STUDIO_MAX_CLIPS', 1024))
+MAX_SECONDS = int(os.environ.get('STUDIO_MAX_SECONDS', 14400))
 
 
-def run(args, timeout=180):
+def run(args, timeout=3600):
     result = subprocess.run(args, capture_output=True, timeout=timeout)
     if result.returncode:
+        if b'No space left' in result.stderr:
+            raise ValueError('작업 서버 임시 공간이 부족해요. 사용 구간만 포함해 AAF를 내보내거나 이전 작업을 정리해 주세요.')
         raise ValueError('오디오 변환에 실패했어요. PCM WAV 또는 지원되는 미디어인지 확인해 주세요.')
     return result.stderr.decode('utf8', 'replace')
 
@@ -38,13 +40,13 @@ def ff(*args):
     return run(['ffmpeg', '-nostdin', '-hide_banner', '-loglevel', 'info', '-y', '-threads', '1', '-filter_threads', '1', '-filter_complex_threads', '1', *bounded[:-1], '-threads', '1', bounded[-1]])
 
 
-def probe(path):
+def probe(path, allow_long=False):
     result = subprocess.run(['ffprobe', '-v', 'error', '-protocol_whitelist', 'file,pipe', '-format_whitelist', 'wav,aiff,mov,mp4,m4a,3gp,3g2,mj2,matroska,webm,mp3,ogg,flac', '-show_format', '-show_streams', '-of', 'json', str(path)], capture_output=True, timeout=30)
     if result.returncode:
         raise ValueError('미디어를 읽지 못했어요.')
     data = json.loads(result.stdout)
     duration = float(data.get('format', {}).get('duration', 0))
-    if not math.isfinite(duration) or not 0 < duration <= MAX_DURATION + 60:
+    if not math.isfinite(duration) or not 0 < duration <= (8 * 3600 if allow_long else MAX_DURATION + 60):
         raise ValueError('미디어 길이는 11분 이하여야 해요.')
     return data, duration
 
@@ -72,6 +74,7 @@ def inspect_job(root):
                 raise ValueError('같은 이름의 연결 오디오가 두 개 있어요. 파일 이름을 구분해 주세요.')
             linked[key] = u['file']
     tracks, warnings, extracted, clip_count = [], [], {}, [0]
+    clip_seconds = [0]
     timeline_duration = 0
     empty_tracks = 0
     with aaf2.open(str(root / aafs[0]['file']), 'r') as f:
@@ -80,8 +83,8 @@ def inspect_job(root):
             raise ValueError('최상위 Composition이 하나인 AAF를 내보내 주세요.')
         comp = comps[0]
 
-        def media(mob):
-            key = str(mob.mob_id)
+        def media(mob, start, duration):
+            key = (str(mob.mob_id), str(start), str(duration))
             if key in extracted:
                 return extracted[key]
             descriptor = mob.descriptor
@@ -90,10 +93,31 @@ def inspect_job(root):
                     raise ValueError('현재는 PCM 오디오가 포함된 AAF를 지원해요. PCM/WAV로 다시 내보내 주세요.')
                 if int(descriptor['QuantizationBits'].value) not in (16, 24, 32) or int(descriptor['Channels'].value) not in (1, 2):
                     raise ValueError('16/24/32비트 모노·스테레오 PCM만 지원해요.')
-                if int(descriptor.length) > 660 * float(descriptor['AudioSamplingRate'].value):
-                    raise ValueError('AAF에 포함된 소스 오디오가 너무 길어요. 필요한 구간만 포함해서 내보내 주세요.')
+                sample_rate = int(float(descriptor['AudioSamplingRate'].value))
+                channels = int(descriptor['Channels'].value)
+                width = int(descriptor['QuantizationBits'].value) // 8
+                first = round(start * sample_rate)
+                frames = round(duration * sample_rate)
+                if not 8000 <= sample_rate <= 192000 or first < 0 or frames < 1 or first + frames > int(descriptor.length):
+                    raise ValueError('AAF 오디오 샘플 범위를 확인해 주세요.')
                 filename = 'essence-%d.wav' % len(extracted)
-                mob.export_audio(str(root / filename))
+                stream = mob.essence.open('r')
+                stream.seek(first * channels * width)
+                remaining = frames * channels * width
+                import shutil
+                if shutil.disk_usage(root).free < remaining + 512 * 1024**2:
+                    raise ValueError('AAF 사용 구간을 추출할 임시 공간이 부족해요.')
+                with wave.open(str(root / filename), 'wb') as out:
+                    out.setparams((channels, width, sample_rate, 0, 'NONE', 'not compressed'))
+                    while remaining:
+                        block = stream.read(min(1024 * 1024, remaining))
+                        if not block:
+                            raise ValueError('AAF에 포함된 오디오가 잘렸어요.')
+                        out.writeframesraw(block)
+                        remaining -= len(block)
+                stream.close()
+                extracted[key] = (filename, Fraction(0))
+                return extracted[key]
             else:
                 matches = set()
                 for locator in descriptor['Locator'].value or []:
@@ -105,9 +129,9 @@ def inspect_job(root):
                 if len(matches) != 1:
                     raise ValueError('연결 오디오가 없거나 이름이 모호해요: ' + str(mob.name or '이름 없는 소스')[:100])
                 filename = next(iter(matches))
-                probe(root / filename)
-            extracted[key] = filename
-            return filename
+                probe(root / filename, allow_long=True)
+            extracted[key] = (filename, start)
+            return extracted[key]
 
         def flatten(seg, rate, window, duration, dest, clips, depth=0):
             if depth > 20:
@@ -134,14 +158,20 @@ def inspect_job(root):
             source_rate = Fraction(str(slot.edit_rate))
             source_start = Fraction(seg.start) / source_rate + window
             if mob.__class__.__name__ == 'SourceMob':
-                filename = media(mob)
-                _, source_duration = probe(root / filename)
+                clip_seconds[0] += float(duration)
+                if clip_seconds[0] > MAX_SECONDS:
+                    raise ValueError('사용 구간 합계가 처리 상한을 초과했어요.')
+                original_start = source_start
+                if clip_count[0] >= MAX_CLIPS or float(duration) > MAX_DURATION or source_start < 0:
+                    raise ValueError('AAF 클립 수 또는 구간 범위를 초과했어요.')
+                filename, source_start = media(mob, source_start, duration)
+                _, source_duration = probe(root / filename, allow_long=True)
                 if source_start < 0 or float(source_start + duration) > source_duration + 0.025:
                     raise ValueError('AAF 클립의 소스 범위가 오디오 길이를 벗어났어요.')
                 clip_count[0] += 1
                 if clip_count[0] > MAX_CLIPS:
                     raise ValueError('오디오 클립은 %d개까지 지원해요.' % MAX_CLIPS)
-                clips.append({'file': filename, 'sourceStart': float(source_start), 'start': float(dest), 'duration': float(duration)})
+                clips.append({'file': filename, 'sourceStart': float(source_start), 'originalSourceStart': float(original_start), 'start': float(dest), 'duration': float(duration)})
             else:
                 flatten(slot.segment, source_rate, source_start, duration, dest, clips, depth + 1)
 
@@ -160,8 +190,8 @@ def inspect_job(root):
                 raise ValueError('오디오 트랙 Origin이 0인 AAF로 내보내 주세요. 현재 버전은 다른 Origin을 자동 보정하지 않아요.')
             clips = []
             flatten(slot.segment, rate, Fraction(0), duration, Fraction(0), clips)
-            if len(clips) > 96:
-                raise ValueError('한 트랙에 오디오 클립은 96개까지 지원해요.')
+            if len(clips) > 512:
+                raise ValueError('한 트랙에 오디오 클립은 512개까지 지원해요.')
             timeline_duration = max(timeline_duration, float(duration))
             if not clips:
                 empty_tracks += 1
@@ -222,6 +252,23 @@ def attach_video(root):
 
 def mix(root, inputs, output, duration, duck=None, limit=True, codec='pcm_s16le'):
     """inputs: file, delay seconds, gain dB. Each file is already trimmed to fit."""
+    if len(inputs) > 8:
+        ordered = sorted(inputs, key=lambda x: x.get('start', 0))
+        partials, intermediates = [], []
+        try:
+            for i in range(0, len(ordered), 8):
+                batch = ordered[i:i + 8]
+                lo = min(x.get('start', 0) for x in batch)
+                hi = min(duration, max(x.get('start', 0) + probe(root / x['file'], allow_long=True)[1] for x in batch))
+                name = 'batch-' + uuid4().hex + '.wav'
+                intermediates.append(name)
+                mix(root, [{**x, 'start': x.get('start', 0) - lo} for x in batch], name, hi - lo, limit=False, codec='pcm_f32le')
+                partials.append({'file': name, 'start': lo})
+            mix(root, partials, output, duration, duck=duck, limit=limit, codec=codec)
+            return
+        finally:
+            for name in intermediates:
+                (root / name).unlink(missing_ok=True)
     args, filters = [], []
     for i, item in enumerate(inputs):
         args += ['-i', str(root / item['file'])]
@@ -272,8 +319,16 @@ def prepare_analysis(root):
     if settings.get('useDialogue'):
         inputs = [{'file': 'dialogue-approved.wav'}]
     mix(root, inputs, 'analysis-original.wav', manifest['duration'])
-    ff('-i', root / manifest['video'], '-i', root / 'analysis-original.wav', '-map', '0:v:0', '-map', '1:a:0', '-vf', 'scale=w=min(960\\,iw):h=min(960\\,ih):force_original_aspect_ratio=decrease:force_divisible_by=2', '-c:v', 'libx264', '-preset', 'ultrafast', '-crf', 26, '-maxrate', '1800k', '-bufsize', '3600k', '-c:a', 'aac', '-b:a', '128k', '-t', manifest['duration'], '-movflags', '+faststart', root / 'analysis-reference.mp4')
-    return {**manifest, 'analysisVideo': 'analysis-reference.mp4'}
+    segments = []
+    count = math.ceil(manifest['duration'] / 600)
+    for i in range(count):
+        start = i * manifest['duration'] / count
+        length = min(600, manifest['duration'] - start, manifest['duration'] / count)
+        name = 'analysis-reference.mp4' if i == 0 else 'analysis-%03d.mp4' % i
+        ff('-ss', start, '-i', root / manifest['video'], '-ss', start, '-i', root / 'analysis-original.wav', '-map', '0:v:0', '-map', '1:a:0', '-vf', 'scale=w=min(960\\,iw):h=min(960\\,ih):force_original_aspect_ratio=decrease:force_divisible_by=2', '-c:v', 'libx264', '-preset', 'ultrafast', '-crf', 26, '-maxrate', '1800k', '-bufsize', '3600k', '-c:a', 'aac', '-b:a', '128k', '-t', length, '-movflags', '+faststart', root / name)
+        segments.append({'file': name, 'start': start, 'duration': length})
+    return {**manifest, 'analysisVideo': segments[0]['file'], 'analysisSegments': segments}
+
 
 
 def render(root):

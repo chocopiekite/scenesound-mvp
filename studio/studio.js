@@ -1,7 +1,7 @@
 'use strict';
 const $=id=>document.getElementById(id);
-let apiBase='',apiToken='',mediaTicket='',publicWorker=false,limits={duration:600,bytes:1024**3};
-async function configureServer(){if(location.hostname==='127.0.0.1')return;const r=await fetch('/api/studio-session',{cache:'no-store'});const data=await r.json();if(!r.ok)throw Error(data.error||'작업 서버 연결을 준비 중이에요.');const url=new URL(data.worker);if(url.protocol!=='https:'||!url.hostname.endsWith('.onrender.com'))throw Error('작업 서버 주소를 확인해 주세요.');apiBase=url.origin;apiToken=data.token;publicWorker=true;limits={duration:data.maxDuration,bytes:data.maxBytes};document.querySelector('header .badge').textContent='실제 자동 처리 · 공개 알파';$('upload-limits').textContent='5분 이하 · 영상 500MB · 각 AAF/오디오 250MB · 전체 1GB 이하. AAF와 영상의 시작점을 맞춰 주세요.';$('privacy-note').textContent='AAF·오디오·영상과 결과 파일은 Render 작업 서버의 임시 비공개 폴더에서 처리해요. 브라우저별 임시 권한으로 작업을 구분해요. 선택한 AAF 소리를 합친 분석용 영상은 Supabase 전송 서버를 거쳐 TwelveLabs로 전달되며 분석 후 삭제를 요청해요. 소리 검색어는 Freesound·Wikimedia Commons로 전달돼요. 재시작·연결 중단으로 파일이 사라지거나 외부 분석 파일이 남을 수 있어요.';$('retention-note').textContent='무료 서버는 잠들었다가 다시 켜질 수 있어요. 재시작·배포 시 임시 파일이 사라질 수 있으니 결과를 바로 내려받아 주세요. 완료 작업은 최대 24시간 보관하고 정리합니다.';}
+let apiBase='',apiToken='',mediaTicket='',publicWorker=false,limits={duration:1800,bytes:6*1024**3};
+async function configureServer(){if(location.hostname==='127.0.0.1')return;const r=await fetch('/api/studio-session',{cache:'no-store'});const data=await r.json();if(!r.ok)throw Error(data.error||'작업 서버 연결을 준비 중이에요.');const url=new URL(data.worker);if(url.protocol!=='https:'||!url.hostname.endsWith('.onrender.com'))throw Error('작업 서버 주소를 확인해 주세요.');apiBase=url.origin;apiToken=data.token;publicWorker=true;limits={duration:data.maxDuration,bytes:data.maxBytes};document.querySelector('header .badge').textContent='실제 자동 처리 · 공개 알파';$('upload-limits').textContent='30분 이하 · AAF 2GB · 영상 2GB · 오디오 1GB · 전체 6GB 이하. AAF와 영상의 시작점을 맞춰 주세요.';$('privacy-note').textContent='AAF·오디오·영상과 결과 파일은 Render 작업 서버의 임시 비공개 폴더에서 처리해요. 브라우저별 임시 권한으로 작업을 구분해요. 선택한 AAF 소리를 합친 분석용 영상은 Supabase 전송 서버를 거쳐 TwelveLabs로 전달되며 분석 후 삭제를 요청해요. 소리 검색어는 Freesound·Wikimedia Commons로 전달돼요. 재시작·연결 중단으로 파일이 사라지거나 외부 분석 파일이 남을 수 있어요.';$('retention-note').textContent='무료 서버는 잠들었다가 다시 켜질 수 있어요. 재시작·배포 시 임시 파일이 사라질 수 있으니 결과를 바로 내려받아 주세요. 완료 작업은 최대 24시간 보관하고 정리합니다.';}
 let useDialogue=false;
 let jobId,manifest,result,selectedVideo,working=false,players=[],originalPlayer,mode='wet',revision=0,playbackGeneration=0,selectedAssetId=null,dirty=false,localVideoUrl;
 const emptyTimeline=$('timeline').innerHTML;
@@ -19,7 +19,7 @@ function error(message){$('error').hidden=false;$('error').textContent=message;}
 function busy(value){working=value;$('preview').controls=!value;document.querySelectorAll('button,input,select').forEach(el=>{el.disabled=value;});if(value){$('error').hidden=true;$('preview').pause();}else{for(const id of ['listen-wet','listen-dry','remix-button'])$(id).disabled=!result;$('timeline-play').disabled=!$('preview').getAttribute('src');}}
 async function request(path,body,method='POST',retried=false){const response=await fetch(apiBase+'/api/studio/'+path,{method,headers:{...(body?{'Content-Type':'application/json'}:{}),...(apiToken?{Authorization:'Bearer '+apiToken}:{})},...(body?{body:JSON.stringify(body)}:{})});const data=await response.json();if(response.status===401&&publicWorker&&!retried){await configureServer();return request(path,body,method,true);}if(!response.ok)throw Error(data.error||'작업을 진행하지 못했어요.');if(data.ticket)mediaTicket=data.ticket;return data;}
 
-async function waitJob(){for(let i=0;i<1500;i++){const data=await request('jobs/'+jobId,null,'GET');if(data.status==='ready')return data.data;if(data.status==='error')throw Error(data.error);status(data.stage||'파일을 처리하고 있어요.');await new Promise(resolve=>setTimeout(resolve,1000));}throw Error('처리가 오래 걸리고 있어요. 서버를 확인하고 다시 열어 주세요.');}
+async function waitJob(){for(let i=0;i<7200;i++){const data=await request('jobs/'+jobId,null,'GET');if(data.status==='ready')return data.data;if(data.status==='error')throw Error(data.error);status(data.stage||'파일을 처리하고 있어요.');await new Promise(resolve=>setTimeout(resolve,1000));}throw Error('처리가 오래 걸리고 있어요. 서버를 확인하고 다시 열어 주세요.');}
 function node(tag,text,className){const el=document.createElement(tag);if(text!==undefined)el.textContent=text;if(className)el.className=className;return el;}
 function showRoles(){
  $('import-panel').hidden=true;$('roles-panel').hidden=false;$('job-actions').hidden=false;$('track-roles').replaceChildren();
@@ -32,20 +32,20 @@ $('import-form').onsubmit=async e=>{
  try{
  const aaf=$('aaf-file').files[0],video=$('video-file').files[0],audio=[...$('audio-files').files];
  if(useDialogue&&jobId&&!manifest.video){
-  if(!video||video.size>500*1024*1024)throw Error('500MB 이하 참조 영상을 선택해 주세요.');
+  if(!video||video.size>2*1024**3)throw Error('2GB 이하 참조 영상을 선택해 주세요.');
   status('정리한 대사에 참조 영상을 연결하고 있어요.');
-  const r=await fetch(apiBase+'/api/studio/jobs/'+jobId+'/files?'+new URLSearchParams({role:'video',name:video.name}),{method:'POST',headers:apiToken?{Authorization:'Bearer '+apiToken}:{},body:video});const data=await r.json();if(!r.ok)throw Error(data.error);
+  await uploadStudioFile(video,'video',{base:apiBase,job:jobId,auth:()=>apiToken,request,onProgress:p=>status('참조 영상 전송 · '+p+'%')});
   await request('jobs/'+jobId+'/attach-video');manifest=await waitJob();showRoles();$('import-panel').hidden=true;status('참조 영상을 연결했어요. 효과음·배경음 초안을 만들어 보세요.');return;
  }
  if(!video)throw Error('참조 영상을 선택해 주세요.');
  const files=[...(aaf?[{file:aaf,role:'aaf'}]:[]),{file:video,role:'video'},...audio.map(file=>({file,role:'audio'}))];
- if(video.size>500*1024*1024||files.reduce((s,x)=>s+x.file.size,0)>limits.bytes||files.length>64)throw Error(publicWorker?'영상 500MB·전체 1GB·파일 64개 이하여야 해요.':'영상은 500MB, 전체는 1GB, 파일은 64개 이하여야 해요.');
- if(publicWorker&&files.some(x=>x.role!=='video'&&x.file.size>250*1024*1024))throw Error('각 AAF·오디오는 250MB 이하여야 해요.');
+ if(video.size>2*1024**3||files.reduce((s,x)=>s+x.file.size,0)>limits.bytes||files.length>64)throw Error(publicWorker?'영상 2GB·전체 6GB·파일 64개 이하여야 해요.':'영상은 2GB, 전체는 6GB, 파일은 64개 이하여야 해요.');
+ if(files.some(x=>x.file.size>(['aaf','video'].includes(x.role)?2*1024**3:1024**3)))throw Error('AAF·영상은 각 2GB, 오디오는 각 1GB 이하여야 해요.');
  if(jobId){try{await request('jobs/'+jobId,null,'DELETE');}catch(e){if(!/만료|찾을 수 없/.test(e.message))throw e;}sessionStorage.removeItem('scenesound-effects-job');jobId=null;}
  manifest=null;result=null;stopPlayers();$('sound-edits').replaceChildren();selectAsset(null);resetDirty();$('timeline').innerHTML=emptyTimeline;$('roles-panel').hidden=true;$('result-panel').hidden=true;jobId=(await request('jobs')).id;sessionStorage.setItem('scenesound-effects-job',jobId);$('job-actions').hidden=false;selectedVideo=video;
  for(const [i,{file,role}]of files.entries()){
  status('파일 가져오는 중 · '+(i+1)+'/'+files.length+' · '+file.name);
- const r=await fetch(apiBase+'/api/studio/jobs/'+jobId+'/files?'+new URLSearchParams({role,name:file.name}),{method:'POST',headers:apiToken?{Authorization:'Bearer '+apiToken}:{},body:file});const d=await r.json();if(!r.ok)throw Error(d.error);
+ await uploadStudioFile(file,role,{base:apiBase,job:jobId,auth:()=>apiToken,request,onProgress:p=>status('파일 가져오기 · '+(i+1)+'/'+files.length+' · '+p+'%')});
  }
  await request('jobs/'+jobId+'/inspect');manifest=await waitJob();showRoles();$('result-panel').hidden=true;status('영상을 가져왔어요. 원본 소리를 유지하고 효과음·배경음을 배치해 보세요.');$('roles-panel').scrollIntoView({behavior:'smooth',block:'start'});
  }catch(e){error(e.message);}finally{busy(false);}
@@ -55,10 +55,7 @@ $('process-button').onclick=async()=>{
  try{
  const chosen=config();if(!Object.values(chosen.roles).some(r=>r!=='ignore'))throw Error('사용할 트랙을 하나 이상 골라 주세요.');
  if(!Object.values(chosen.roles).includes('dialogue')){status('대사 트랙이 지정되지 않아 클리닝과 대사 기반 덕킹은 적용하지 않아요.');}
- await request('jobs/'+jobId+'/prepare-analysis',chosen);const prepared=await waitJob();const blob=await(await fetch(fileUrl(prepared.analysisVideo))).blob();selectedVideo=new File([blob],'analysis-reference.mp4',{type:'video/mp4'});
- status('영상 분석 서버에 연결하고 있어요.');await cleanupUpload();
- const token=await uploadVideo(selectedVideo,manifest.duration);status('영상의 장면과 기존 소리를 분석하고 있어요.');
- const response=await fetch('/api/analyze',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({token}),signal:AbortSignal.timeout(270000)});const plan=await response.json();if(!response.ok)throw Error(plan.error||'영상 분석에 실패했어요.');
+ await request('jobs/'+jobId+'/prepare-analysis',chosen);const prepared=await waitJob();const plan=await analyzePrepared(prepared);
  await request('jobs/'+jobId+'/render',{...chosen,plan});result=await waitJob();showResult();status('전체 초안을 만들었어요. 원본과 비교하고 필요한 부분을 수정해 주세요.');document.querySelector('.timeline-panel').scrollIntoView({behavior:'smooth',block:'center'});
  }catch(e){error(e.message);}finally{await cleanupUpload();busy(false);}
 };
