@@ -39,12 +39,24 @@ async function cleanupUpload(){
   activeUpload=undefined;
 }
 
-async function uploadStudioFile(file,role,{base,job,auth,request,onProgress}){
+async function uploadStudioFile(file,role,{base,job,auth,request,onProgress,onRetry,fetchChunk=fetch,pause=ms=>new Promise(resolve=>setTimeout(resolve,ms))}){
  const path='jobs/'+job+'/uploads',transfer=await request(path,{name:file.name,role,size:file.size});let offset=transfer.offset;
- while(offset<file.size){const chunk=file.slice(offset,Math.min(file.size,offset+transfer.chunkBytes));let next;
-  for(let attempt=0;attempt<3;attempt++){
-   try{const r=await fetch(base+'/api/studio/'+path+'/'+transfer.id+'?offset='+offset,{method:'POST',headers:auth()?{Authorization:'Bearer '+auth()}:{},body:chunk,signal:AbortSignal.timeout(180000)});const d=await r.json().catch(()=>({error:'파일 전송 서버의 응답을 확인하지 못했어요.'}));if(!r.ok){const e=Error(d.error||'파일 전송에 실패했어요.');e.status=r.status;throw e;}next=d.offset;break;}
-   catch(e){if([400,403,413,507].includes(e.status)||attempt===2)throw e;const info=await request(path+'/'+transfer.id,null,'GET');if(info.offset>offset){next=info.offset;break;}}
+ const fatal=e=>[400,403,404,413,507].includes(e.status);
+ while(offset<file.size){let next,checkOffset=false;
+  for(let attempt=0;attempt<8;attempt++){
+   try{
+    // Never send a chunk again until the server confirms its committed offset.
+    if(checkOffset){const info=await request(path+'/'+transfer.id,null,'GET');if(!Number.isSafeInteger(info.offset)||info.offset<offset||info.offset>file.size)throw Object.assign(Error('파일 전송 위치를 확인하지 못했어요.'),{status:400});if(info.offset>offset){next=info.offset;break;}}
+    const chunk=file.slice(offset,Math.min(file.size,offset+transfer.chunkBytes));
+    const r=await fetchChunk(base+'/api/studio/'+path+'/'+transfer.id+'?offset='+offset,{method:'POST',headers:auth()?{Authorization:'Bearer '+auth()}:{},body:chunk,signal:AbortSignal.timeout(180000)});
+    const d=await r.json().catch(()=>({error:'파일 전송 서버의 응답을 확인하지 못했어요.'}));
+    if(!r.ok)throw Object.assign(Error(d.error||'파일 전송에 실패했어요.'),{status:r.status});
+    next=d.offset;break;
+   }catch(e){
+    if(fatal(e))throw e;
+    if(attempt===7)throw Error('업로드 연결이 계속 끊겨 전송을 멈췄어요. 네트워크와 서버 상태를 확인한 뒤 다시 시도해 주세요. 서버가 재시작됐다면 처음부터 업로드해야 해요.');
+    checkOffset=true;onRetry?.(attempt+1);await pause(Math.min(15000,1000*2**attempt));
+   }
   }
   if(!Number.isSafeInteger(next)||next<=offset||next>file.size)throw Error('파일 전송 위치를 확인하지 못했어요.');offset=next;onProgress?.(Math.round(offset/file.size*100));
  }
@@ -62,4 +74,4 @@ function combineAnalysisResults(results,task){
  return{summary:results.map(r=>r.summary).join(' ').slice(0,1500),sounds:results.flatMap(r=>r.sounds.map(s=>({...s,start:s.start+r.offset,end:s.end+r.offset}))).slice(0,60)};
 }
 
-if(typeof module!=='undefined')module.exports={combineAnalysisResults};
+if(typeof module!=='undefined')module.exports={combineAnalysisResults,uploadStudioFile};
