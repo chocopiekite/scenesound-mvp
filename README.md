@@ -2,7 +2,7 @@
 
 ## 공개 Studio 연결 (2026-10-27)
 
-- 화면: https://scenesound-mvp.vercel.app/studio.html . 홈페이지의 AAF 초안 버튼으로 진입합니다. 기존 영상 추천·신청 기능도 유지합니다.
+- 화면: https://scenesound-mvp.vercel.app/studio.html . 홈페이지에서 바로 트랙 편집 화면으로 진입합니다. 기존 영상 추천·신청 기능도 유지합니다.
 - 작업 서버: Render Free, Singapore, Docker (`studio/Dockerfile`). https://scenesound-studio-worker.onrender.com . `/healthz`는 상태 확인용입니다.
 - Vercel Secret `STUDIO_WORKER_SECRET`과 Config `STUDIO_WORKER_URL`, Render Secret `STUDIO_WORKER_SECRET` 및 `STUDIO_ALLOWED_ORIGIN`으로 연결합니다. 비밀 값은 문서·소스에 넣지 않습니다.
 - Vercel은 HttpOnly/Secure 쿠키로 익명 브라우저 ID를 유지하며 2시간짜리 서명 권한을 발급합니다. Render API는 서명과 작업 소유자를 검사합니다. 음원·결과 미디어는 해당 작업의 1시간짜리 읽기 전용 서명 URL로 제공합니다. 다른 방문자의 작업 조회·변경·삭제는 거절합니다. 회원가입·결제는 없습니다.
@@ -24,7 +24,7 @@ python3 -m venv .venv-studio
 npm run dev
 ```
 
-열기: http://127.0.0.1:8001/studio.html . 기존 추천 화면은 `/`에 있습니다. 현재 컴퓨터의 FFmpeg 8.1.1과 pyaaf2 1.7.1로 확인했습니다.
+열기: http://127.0.0.1:8001/studio.html . 기존 추천·신청 화면은 `/sound-finder.html`에 있습니다. 현재 컴퓨터의 FFmpeg 8.1.1과 pyaaf2 1.7.1로 확인했습니다.
 
 - AAF: 최상위 Composition 1개, 오디오 트랙 1~24개, 컷(SourceClip)/빈 구간(Filler)/Sequence와 MasterMob 참조 지원. PCM 내장 오디오 또는 사용자가 따로 선택한 연결 오디오. 한 트랙 96클립·전체 256클립·클립 길이 합 60분 이하. 타임라인 Origin 0, 영상 첫 프레임 기준 정렬.
 - 입력: 타임라인 10분, 참조 영상 200MB, 개별 AAF/연결 오디오 512MB, 전체 1GB·64파일 이하. 영상은 가로·세로 360픽셀 이상·비율 2.4:1 이내. 로컬 빈 디스크 3GB 이상 필요. 최대 길이·트랙 수 조합의 부하 시험은 미실시.
