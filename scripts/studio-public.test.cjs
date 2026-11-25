@@ -30,8 +30,8 @@ test('Vercel session refresh keeps the private browser identity and never return
  const cookie=headers['Set-Cookie'].split(';')[0];await sessionHandler({method:'GET',headers:{cookie}},res);assert.equal(auth.verify(data.token,'session').sid,first.sid);
 });
 test.after(()=>fs.rmSync(process.env.STUDIO_DATA_DIR,{recursive:true,force:true}));
-test('public uploads expose 8 GB total and reject oversize declared media before streaming',async()=>{
- const info=await call('/api/studio/status');assert.equal(info.data.maxBytes,8*1024**3);assert.equal(handler.uploadLimit('video'),2*1024**3);assert.equal(handler.uploadLimit('aaf'),5*1024**3);
+test('public uploads reflect the 1 GiB safe input budget and reject oversize media before streaming',async()=>{
+ const info=await call('/api/studio/status');assert.equal(info.data.maxBytes,1024**3);assert.equal(info.data.storageBudgetBytes,1.5*1024**3);assert.equal(handler.uploadLimit('video'),1024**3);assert.equal(handler.uploadLimit('aaf'),1024**3);
  const created=await call('/api/studio/jobs','POST',auth.session(A));const url='/api/studio/jobs/'+created.data.id;
  assert.equal((await call(url+'/files?role=video&name=test.mp4','POST',auth.session(A),{'content-length':String(2*1024**3+1)})).code,413);
  assert.equal((await call(url+'/files?role=aaf&name=test.aaf','POST',auth.session(A),{'content-length':String(5*1024**3+1)})).code,413);
@@ -41,7 +41,7 @@ test('chunk uploads enforce owner, offsets, byte bounds and exactly-once complet
  const {Readable}=require('node:stream');
  const created=await call('/api/studio/jobs','POST',auth.session(A));const url='/api/studio/jobs/'+created.data.id;
  async function streamCall(path,body,method='POST',who=A){let code=200,data;const bytes=Buffer.isBuffer(body)?body:Buffer.from(JSON.stringify(body));const req=Readable.from([bytes]);Object.assign(req,{url:path,method,headers:{host:'worker.onrender.com',origin:'https://scenesound-mvp.vercel.app',authorization:'Bearer '+auth.session(who),'content-length':String(bytes.length)}});const res={setHeader(){},status(c){code=c;return this;},json(d){data=d;}};await handler(req,res);return{code,data};}
- try{const start=await streamCall(url+'/uploads',{role:'aaf',name:'test.aaf',size:6});assert.equal(start.code,200);const upload=url+'/uploads/'+start.data.id;
+ try{assert.equal((await streamCall(url+'/uploads',{role:'aaf',name:'large.aaf',size:1024**3+1})).code,413);const start=await streamCall(url+'/uploads',{role:'aaf',name:'test.aaf',size:6});assert.equal(start.code,200);const upload=url+'/uploads/'+start.data.id;
  assert.equal((await streamCall(upload+'?offset=0',Buffer.from('abc'),'POST',B)).code,403);
  assert.equal((await streamCall(upload+'?offset=1',Buffer.from('abc'))).code,409);
  assert.equal((await streamCall(upload+'?offset=0',Buffer.from('abc'))).data.offset,3);

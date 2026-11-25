@@ -10,6 +10,6 @@ module.exports=async(req,res)=>{
  const cookies=Object.fromEntries((req.headers.cookie||'').split(';').map(c=>c.trim().split('=')));
  const previous=verify(cookies['ss-studio-session'],'cookie'),sid=previous?.sid||randomUUID();
  res.setHeader('Set-Cookie','ss-studio-session='+sign({kind:'cookie',sid,exp:Math.floor(Date.now()/1000)+86400})+'; HttpOnly; Secure; SameSite=Strict; Path=/api/studio-session; Max-Age=86400');
- return res.status(200).json({ready:true,worker:worker.origin,token:session(sid),maxDuration:1800,maxBytes:8*1024**3,maxAafBytes:5*1024**3,maxVideoBytes:2*1024**3,maxAudioBytes:1024**3});
+ return res.status(200).json({ready:true,worker:worker.origin,token:session(sid),maxDuration:1800,maxBytes:1024**3,maxAafBytes:1024**3,maxVideoBytes:1024**3,maxAudioBytes:1024**3});
  }catch{return res.status(503).json({error:'공개 작업 서버를 준비 중이에요. 잠시 후 다시 열어 주세요.'});}
 };
