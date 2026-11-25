@@ -106,9 +106,10 @@ class EngineTests(unittest.TestCase):
             m = engine.inspect_job(root)
             self.assertIsNone(m['video'])
             self.assertEqual(m['duration'], 8)
-            settings = {'roles': {t['id']: 'dialogue' for t in m['tracks']}, 'clean': True, 'deduplicate': True, 'scenes': [{'start': 0, 'title': '실내 씬'}, {'start': 4, 'title': '복도 씬'}]}
+            settings = {'roles': {t['id']: 'dialogue' for t in m['tracks']}, 'clean': True, 'deduplicate': True, 'scenes': [{'start': 0, 'title': '실내 씬'}, {'start': 4 + 1 / 3000000, 'title': '복도 씬'}]}
             engine.save(root / 'settings.json', settings)
             r = dialogue.render_dialogue(root, engine)
+            self.assertEqual(r['report']['scenes'][1]['start'], 4)
             self.assertEqual(len(r['report']['duplicates']), 2)
             self.assertEqual(r['report']['removedDuplicateTracks'], 1)
             self.assertEqual(r['report']['normalizationMode'], 'clipStaticShortTerm')
@@ -300,6 +301,10 @@ class EngineTests(unittest.TestCase):
                 engine.mix(root, inputs, 'sum.wav', 19.394374999999968, limit=False, codec='pcm_f32le')
             _, duration = engine.probe(root / 'sum.wav', allow_long=True)
             self.assertAlmostEqual(duration, 930930 / 48000, places=5)
+            engine.mix(root, [{'file': 'one.wav', 'start': 37 / 48000}], 'offset.wav', 2, limit=False)
+            with wave.open(str(root / 'offset.wav')) as shifted, wave.open(str(root / 'one.wav')) as source:
+                self.assertEqual(set(shifted.readframes(37)), {0})
+                self.assertEqual(shifted.readframes(200), source.readframes(200))
 
     def test_video_only_sound_tool_needs_no_aaf(self):
         with tempfile.TemporaryDirectory(prefix='scenesound-video-only-') as d:

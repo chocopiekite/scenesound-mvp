@@ -9,3 +9,4 @@ supabase/.branches/
 .venv-studio/
 __pycache__/
 *.pyc
+/output/real-aaf-test-*/

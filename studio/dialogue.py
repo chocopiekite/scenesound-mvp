@@ -107,19 +107,25 @@ def render_dialogue(source, engine):
     if not any(a['before']['lufs'] is not None for a in adjustments):
         raise ValueError('선택한 대사에 측정 가능한 소리가 없어요. 무음 또는 0.4초보다 짧은 클립인지 확인해 주세요.')
     engine.mix(root, original, 'original.wav', duration)
-    scenes = settings.get('scenes') or [{'start': 0, 'title': '씬 1'}]
+    # Video frame timestamps and AAF edit rates can differ by fractions of one
+    # audio sample. Quantize once before intersecting to avoid phantom slivers.
+    scenes = [{**s, 'start': round(s['start'] * engine.RATE) / engine.RATE}
+              for s in (settings.get('scenes') or [{'start': 0, 'title': '씬 1'}])]
     stems = []
     for i, scene in enumerate(scenes):
         start, end = scene['start'], scenes[i + 1]['start'] if i + 1 < len(scenes) else duration
         pieces, clips = [], []
         for index, item in enumerate(retained):
-            lo, hi = max(start, item['start']), min(end, item['start'] + item['duration'])
-            if hi <= lo:
+            item_start = round(item['start'] * engine.RATE)
+            lo_sample = max(round(start * engine.RATE), item_start)
+            hi_sample = min(round(end * engine.RATE), round((item['start'] + item['duration']) * engine.RATE))
+            if hi_sample <= lo_sample:
                 continue
+            lo, hi = lo_sample / engine.RATE, hi_sample / engine.RATE
             name = 'scene-%d-part-%d.wav' % (i, index)
             fade = min(.005, (hi - lo) / 4)
-            engine.ff('-ss', lo - item['start'], '-i', root / ('clean-%d.wav' % index), '-t', hi - lo,
-                      '-af', 'afade=t=in:d=%f,afade=t=out:st=%f:d=%f' % (fade, hi - lo - fade, fade),
+            engine.ff('-i', root / ('clean-%d.wav' % index),
+                      '-af', 'atrim=start_sample=%d:end_sample=%d,asetpts=PTS-STARTPTS,afade=t=in:d=%f,afade=t=out:st=%f:d=%f' % (lo_sample - item_start, hi_sample - item_start, fade, hi - lo - fade, fade),
                       '-ar', 48000, '-ac', 2, '-c:a', 'pcm_f32le', root / name)
             pieces.append({'file': name, 'start': lo - start})
             clips.append({'start': lo, 'duration': hi - lo})

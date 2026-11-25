@@ -366,7 +366,7 @@ def mix(root, inputs, output, duration, duck=None, limit=True, codec='pcm_s16le'
     args, filters = [], []
     for i, item in enumerate(inputs):
         args += ['-i', str(root / item['file'])]
-        filters.append('[%d:a]aresample=48000,aformat=channel_layouts=stereo,volume=%fdB,adelay=%d:all=1[a%d]' % (i, item.get('gain', 0), round(item.get('start', 0) * 1000), i))
+        filters.append('[%d:a]aresample=48000,aformat=channel_layouts=stereo,volume=%fdB,adelay=%dS:all=1[a%d]' % (i, item.get('gain', 0), round(item.get('start', 0) * RATE), i))
     if not inputs:
         ff('-f', 'lavfi', '-i', 'anullsrc=r=48000:cl=stereo', '-t', duration, '-c:a', codec, root / output)
         return
