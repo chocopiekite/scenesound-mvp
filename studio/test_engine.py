@@ -217,6 +217,32 @@ class EngineTests(unittest.TestCase):
             with self.assertRaisesRegex(ValueError, '측정 가능한'):
                 dialogue.render_dialogue(root, engine)
 
+    def test_manual_sound_channels_are_separate_in_wav_and_aaf(self):
+        with tempfile.TemporaryDirectory(prefix='scenesound-channels-') as d:
+            root = Path(d)
+            fixture(root)
+            m = engine.inspect_job(root)
+            channels = [{'id': 'effect', 'role': 'effect', 'name': '발소리', 'gain': 0},
+                        {'id': 'effect-2', 'role': 'effect', 'name': '문소리', 'gain': -6},
+                        {'id': 'ambience', 'role': 'ambience', 'name': '빈 배경음', 'gain': 0}]
+            assets = [{'id': 's%d' % i, 'channelId': c['id'], 'role': 'effect', 'file': 'dialogue.wav', 'start': 1, 'end': 3, 'gain': -12, 'enabled': True, 'title': c['name']} for i, c in enumerate(channels[:2])]
+            engine.save(root / 'settings.json', {'roles': {t['id']: 'original' for t in m['tracks']}, 'clean': False,
+                        'effectChannels': channels, 'trackGains': {'effect-2': -6}, 'assets': assets})
+            r = engine.render(root)
+            self.assertEqual(r['effectChannels'], channels)
+            out = root / r['renderDirectory']
+            with aaf2.open(str(out / 'SceneSound.aaf')) as f:
+                comp = next(f.content.toplevel())
+                self.assertEqual([slot.name for slot in comp.slots][-3:], ['발소리', '문소리', '빈 배경음'])
+            peaks = []
+            for name in ['effect-export.wav', 'effect-2-export.wav', 'ambience-export.wav']:
+                with wave.open(str(out / name)) as w:
+                    samples = array.array('h', w.readframes(w.getnframes()))
+                    peaks.append(max(abs(v) for v in samples))
+            self.assertGreater(peaks[0], 0)
+            self.assertAlmostEqual(peaks[1] / peaks[0], 10 ** (-6 / 20), delta=.01)
+            self.assertEqual(peaks[2], 0)
+
     def test_video_only_sound_tool_needs_no_aaf(self):
         with tempfile.TemporaryDirectory(prefix='scenesound-video-only-') as d:
             root = Path(d)

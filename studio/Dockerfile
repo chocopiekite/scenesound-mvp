@@ -3,7 +3,7 @@ RUN apt-get update && apt-get install -y --no-install-recommends python3 python3
 WORKDIR /app
 COPY studio/requirements.txt /app/studio/requirements.txt
 RUN python3 -m venv /app/.venv-studio && /app/.venv-studio/bin/pip install --no-cache-dir -r /app/studio/requirements.txt
-COPY studio/engine.py studio/dialogue.py studio/file-upload.cjs studio/server.cjs studio/worker.cjs /app/studio/
+COPY studio/engine.py studio/dialogue.py studio/file-upload.cjs studio/editor-model.js studio/server.cjs studio/worker.cjs /app/studio/
 COPY lib/studio-auth.cjs /app/lib/studio-auth.cjs
 RUN useradd --create-home --uid 10001 studio
 USER studio

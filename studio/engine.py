@@ -416,10 +416,12 @@ def render(root):
     if not stems:
         raise ValueError('사용할 원본 오디오 트랙을 하나 이상 골라 주세요.')
     mix(root, dialogue, 'dialogue-sidechain.wav', duration)
-    for role, title in [('effect', '효과음'), ('ambience', '배경음')]:
+    channels = settings.get('effectChannels') or [{'id': 'effect', 'name': '효과음', 'role': 'effect'}, {'id': 'ambience', 'name': '배경음', 'role': 'ambience'}]
+    for channel in channels:
+        role, title = channel['role'], channel['name']
         clips = []
         for asset in settings.get('assets', []):
-            if asset['role'] != role or not asset.get('enabled', True):
+            if asset.get('channelId', asset['role']) != channel['id'] or not asset.get('enabled', True):
                 continue
             length = min(asset['end'] - asset['start'], duration - asset['start'])
             if length <= 0:
@@ -429,16 +431,17 @@ def render(root):
             args = ['-stream_loop', '-1'] if role == 'ambience' else []
             ff(*args, '-i', source_root / asset['file'], '-t', length, '-af', 'afade=t=in:st=0:d=0.02,afade=t=out:st=%f:d=0.03' % max(0, length - 0.03), '-ac', 2, '-ar', RATE, '-c:a', 'pcm_s16le', root / out)
             clips.append({'file': out, 'start': asset['start'], 'gain': asset.get('gain', -12 if role == 'effect' else -20), 'title': asset['title'], 'duration': length})
-        if clips:
-            filename = role + '.wav'
+        if clips or settings.get('effectChannels'):
+            filename = channel['id'] + '.wav'
+            # Each channel keeps the existing dialogue sidechain ducking.
             mix(root, clips, filename, duration, 'dialogue-sidechain.wav' if dialogue else None)
-            stems.append({'id': role, 'name': title, 'role': role, 'file': filename, 'gain': settings.get('trackGains', {}).get(role, 0), 'clips': clips})
+            stems.append({'id': channel['id'], 'name': title, 'role': role, 'file': filename, 'gain': settings.get('trackGains', {}).get(channel['id'], 0), 'clips': clips})
     mix(root, originals, 'original.wav', duration)
-    mix(root, [{'file': t['file'], 'gain': t['gain']} for t in stems], 'mix.wav', duration)
+    mix(root, [{'file': t['file'], 'gain': t['gain']} for t in stems if t['gain'] > -60], 'mix.wav', duration)
     # Exports contain the same track gains as the rendered mix, including explicit mute (-60 dB).
     for t in stems:
         export = t['id'] + '-export.wav'
-        ff('-i', root / t['file'], '-af', 'volume=%fdB' % t['gain'], '-ar', RATE, '-c:a', 'pcm_s16le', root / export)
+        ff('-i', root / t['file'], '-af', 'volume=0' if t['gain'] <= -60 else 'volume=%fdB' % t['gain'], '-ar', RATE, '-c:a', 'pcm_s16le', root / export)
         t['export'] = export
         t['waveform'] = waveform(root / t['file'], duration)
     with aaf2.open(str(root / 'SceneSound.aaf'), 'w') as f:
@@ -458,7 +461,7 @@ def render(root):
     ff('-i', source_root / manifest['video'], '-i', root / 'mix.wav', '-map', '0:v:0', '-map', '1:a:0', '-c:v', 'libx264', '-preset', 'ultrafast', '-crf', 24, '-c:a', 'aac', '-b:a', '192k', '-t', duration, '-movflags', '+faststart', root / 'preview.mp4')
     credits = {'note': '자동 선택한 라이브러리 미리 듣기 음원을 사용한 초안입니다. 각 원본과 이용 조건을 확인하세요.', 'assets': [{k: v for k, v in a.items() if k not in ('file', 'preview')} for a in settings.get('assets', [])]}
     save(root / 'credits.json', credits)
-    result = {'renderDirectory': root.name, 'duration': duration, 'tracks': stems, 'assets': settings.get('assets', []), 'warnings': list(dict.fromkeys(warnings + settings.get('warnings', []))), 'summary': settings.get('summary', ''), 'files': ['mix.wav', 'original.wav', 'SceneSound.aaf', 'preview.mp4', 'credits.json']}
+    result = {'renderDirectory': root.name, 'duration': duration, 'tracks': stems, 'assets': settings.get('assets', []), 'effectChannels': channels, 'editorVersion': 1, 'warnings': list(dict.fromkeys(warnings + settings.get('warnings', []))), 'summary': settings.get('summary', ''), 'files': ['mix.wav', 'original.wav', 'SceneSound.aaf', 'preview.mp4', 'credits.json']}
     save(root / 'result.json', result)
     with zipfile.ZipFile(root / 'SceneSound.zip', 'w', zipfile.ZIP_STORED) as z:
         for name in ['mix.wav', 'SceneSound.aaf', 'preview.mp4', 'credits.json', 'manifest.json'] + [t['export'] for t in stems]:
