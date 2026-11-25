@@ -243,6 +243,64 @@ class EngineTests(unittest.TestCase):
             self.assertAlmostEqual(peaks[1] / peaks[0], 10 ** (-6 / 20), delta=.01)
             self.assertEqual(peaks[2], 0)
 
+    def test_wave_descriptor_extensible_pcm_and_constant_gain(self):
+        import io
+        from types import SimpleNamespace
+        import dialogue
+        with tempfile.TemporaryDirectory(prefix='scenesound-wave-aaf-') as d:
+            root = Path(d)
+            fixture(root)
+            engine.ff('-i', root / 'dialogue.wav', '-c:a', 'pcm_s24le', '-write_bext', 1, root / 'embedded.wav')
+            payload = (root / 'embedded.wav').read_bytes()
+            with aaf2.open(str(root / 'edit.aaf'), 'rw') as f:
+                mob = next(m for m in f.content.sourcemobs() if m.descriptor.__class__.__name__ == 'PCMDescriptor')
+                descriptor = f.create.WAVEDescriptor()
+                descriptor['SampleRate'].value = 48000
+                descriptor['Length'].value = 8 * 48000
+                descriptor['Summary'].value = bytearray(payload[:min(len(payload), 1024)])
+                mob.descriptor = descriptor
+                stream = mob.essence.open('w')
+                stream.write(payload)
+                stream.close()
+                op = f.create.OperationDef('9d2ea894-0968-11d3-8a38-0050040ef7d2', 'Audio Gain')
+                op.media_kind = 'sound'
+                op['IsTimeWarp'].value = False
+                op['NumberInputs'].value = 1
+                f.dictionary.register_def(op)
+                param = f.create.ParameterDef('e4962321-2267-11d3-8a4c-0050040ef7d2', 'Amplitude', typedef='Rational')
+                f.dictionary.register_def(param)
+                seq = next(f.content.toplevel()).slots[0].segment
+                group = f.create.OperationGroup(op, length=seq.components[0].length, media_kind='sound')
+                group.segments.append(seq.components[0].copy())
+                group.parameters.append(f.create.ConstantValue(param, '1/2'))
+                seq.components[0] = group
+            m = engine.inspect_job(root)
+            self.assertEqual([c['sourceGain'] for c in m['tracks'][0]['clips']], [.5, 1])
+            clip = m['tracks'][0]['clips'][0]
+            with wave.open(str(root / clip['file'])) as w:
+                self.assertEqual((w.getsampwidth(), w.getframerate(), w.getnframes()), (3, 48000, 2 * 48000))
+            engine.save(root / 'settings.json', {'roles': {'t0': 'dialogue'}, 'clean': False})
+            r = dialogue.render_dialogue(root, engine)
+            self.assertTrue((root / r['renderDirectory'] / 'SceneSound.aaf').exists())
+            # Truncated RIFF chunk payload must fail rather than read arbitrary offsets.
+            stream = io.BytesIO(payload[:-100]);stream.dir = SimpleNamespace(byte_size=len(payload)-100)
+            with aaf2.open(str(root / 'edit.aaf')) as f:
+                desc = next(m.descriptor for m in f.content.sourcemobs() if m.descriptor.__class__.__name__=='WAVEDescriptor')
+                with self.assertRaisesRegex(ValueError, '잘렸'):
+                    engine.pcm_layout(desc, stream)
+
+    def test_fractional_sample_mix_finishes_and_has_exact_sample_count(self):
+        from unittest.mock import patch
+        with tempfile.TemporaryDirectory(prefix='scenesound-fractional-mix-') as d:
+            root = Path(d)
+            engine.ff('-f', 'lavfi', '-i', 'sine=frequency=330:duration=1', '-ar', 48000, '-ac', 2, root / 'one.wav')
+            inputs = [{'file': 'one.wav', 'start': t} for t in [0, 5.505, 5.505, 5.505, 14.431, 14.431, 14.431, 16.642]]
+            original_run = engine.run
+            with patch.object(engine, 'run', side_effect=lambda args: original_run(args, timeout=15)):
+                engine.mix(root, inputs, 'sum.wav', 19.394374999999968, limit=False, codec='pcm_f32le')
+            _, duration = engine.probe(root / 'sum.wav', allow_long=True)
+            self.assertAlmostEqual(duration, 930930 / 48000, places=5)
+
     def test_video_only_sound_tool_needs_no_aaf(self):
         with tempfile.TemporaryDirectory(prefix='scenesound-video-only-') as d:
             root = Path(d)

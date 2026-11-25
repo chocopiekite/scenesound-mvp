@@ -74,10 +74,10 @@ def render_dialogue(source, engine):
         for i, clip in enumerate(track['clips']):
             name = '%s-%d-raw.wav' % (track['id'], i)
             engine.ff('-ss', clip['sourceStart'], '-i', source / clip['file'], '-t', clip['duration'], '-vn', '-ar', 48000, '-ac', 2, '-c:a', 'pcm_s16le', root / name)
-            original.append({'file': name, 'start': clip['start']})
+            original.append({'file': name, 'start': clip['start'], 'gain': 20 * math.log10(clip.get('sourceGain', 1)) if clip.get('sourceGain', 1) > 0 else -120})
             with wave.open(str(root / name), 'rb') as w:
                 digest = hashlib.sha256(w.readframes(w.getnframes())).hexdigest()
-            key = (round(clip['start'] * 48000), round(clip['duration'] * 48000), digest)
+            key = (round(clip['start'] * 48000), round(clip['duration'] * 48000), digest, clip.get('sourceGain', 1))
             if settings.get('deduplicate', True) and key in seen:
                 duplicates.append({'track': track['name'], 'clip': i + 1, 'start': clip['start'], 'duration': clip['duration'], 'keptTrack': seen[key]})
                 continue
@@ -90,7 +90,7 @@ def render_dialogue(source, engine):
     adjustments = []
     for i, item in enumerate(retained):
         fade = min(.003, item['duration'] / 4)
-        filters = []
+        filters = ['volume=%f' % item['clip'].get('sourceGain', 1)]
         if settings.get('clean', True):
             filters += ['highpass=f=65', 'afftdn=nr=6:nf=-50:tn=1']
         filters += ['afade=t=in:d=%f' % fade, 'afade=t=out:st=%f:d=%f' % (max(0, item['duration'] - fade), fade)]

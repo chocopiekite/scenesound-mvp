@@ -8,6 +8,7 @@ import os
 from pathlib import Path
 import re
 import subprocess
+import struct
 import sys
 import wave
 import zipfile
@@ -88,6 +89,62 @@ def open_pcm_stream(essence):
     return stream
 
 
+def pcm_layout(descriptor, stream):
+    kind = descriptor.__class__.__name__
+    if kind == 'PCMDescriptor':
+        bits, channels = int(descriptor['QuantizationBits'].value), int(descriptor['Channels'].value)
+        rate, frames = int(float(descriptor['AudioSamplingRate'].value)), int(descriptor.length)
+        offset = 0
+    elif kind == 'WAVEDescriptor':
+        stream.seek(0)
+        header = stream.read(12)
+        if len(header) != 12 or header[:4] != b'RIFF' or header[8:12] != b'WAVE':
+            raise ValueError('AAF 안의 WAV 헤더를 읽지 못했어요. RIFF PCM WAV를 지원해요.')
+        size = stream.dir.byte_size
+        cursor, fmt = 12, None
+        for _ in range(10000):
+            if cursor + 8 > size:
+                break
+            stream.seek(cursor)
+            chunk = stream.read(8)
+            if len(chunk) != 8:
+                break
+            tag, length = chunk[:4], struct.unpack('<I', chunk[4:])[0]
+            if cursor + 8 + length > size:
+                raise ValueError('AAF에 포함된 WAV 오디오가 잘렸어요.')
+            if tag == b'fmt ':
+                if not 16 <= length <= 4096:
+                    raise ValueError('AAF WAV의 오디오 형식 정보가 잘못됐어요.')
+                raw = stream.read(length)
+                code, channels, rate, _, align, bits = struct.unpack('<HHIIHH', raw[:16])
+                if code == 0xfffe:
+                    if len(raw) < 40 or struct.unpack('<H', raw[16:18])[0] < 22 or raw[24:40] != bytes.fromhex('0100000000001000800000aa00389b71'):
+                        raise ValueError('AAF WAV의 압축 또는 부동소수점 형식은 아직 지원하지 않아요.')
+                elif code != 1:
+                    raise ValueError('AAF WAV의 압축 또는 부동소수점 형식은 아직 지원하지 않아요.')
+                if bits not in (16, 24, 32) or channels not in (1, 2) or align != channels * (bits // 8):
+                    raise ValueError('16/24/32비트 모노·스테레오 PCM WAV를 지원해요.')
+                fmt = rate, channels, bits, align
+            elif tag == b'data':
+                if fmt is None:
+                    raise ValueError('AAF WAV의 PCM 형식 정보를 찾지 못했어요.')
+                rate, channels, bits, align = fmt
+                if length % align:
+                    raise ValueError('AAF WAV 오디오의 샘플 크기가 맞지 않아요.')
+                offset, frames = cursor + 8, length // align
+                break
+            cursor += 8 + length + (length % 2)
+        else:
+            raise ValueError('AAF WAV의 메타데이터가 너무 복잡해요.')
+        if fmt is None or 'frames' not in locals():
+            raise ValueError('AAF WAV에서 오디오 데이터 구간을 찾지 못했어요.')
+    else:
+        raise ValueError('현재는 PCMDescriptor 또는 WAVEDescriptor의 PCM 오디오가 포함된 AAF를 지원해요.')
+    if bits not in (16, 24, 32) or channels not in (1, 2) or not 8000 <= rate <= 192000 or frames < 1:
+        raise ValueError('AAF PCM 샘플 형식을 확인해 주세요.')
+    return rate, channels, bits // 8, frames, offset
+
+
 def inspect_job(root):
     uploads = json.loads((root / 'uploads.json').read_text())
     aafs = [u for u in uploads if u['role'] == 'aaf']
@@ -122,20 +179,15 @@ def inspect_job(root):
                 return extracted[key]
             descriptor = mob.descriptor
             if mob.essence is not None:
-                if descriptor.__class__.__name__ != 'PCMDescriptor':
-                    raise ValueError('현재는 PCM 오디오가 포함된 AAF를 지원해요. PCM/WAV로 다시 내보내 주세요.')
-                if int(descriptor['QuantizationBits'].value) not in (16, 24, 32) or int(descriptor['Channels'].value) not in (1, 2):
-                    raise ValueError('16/24/32비트 모노·스테레오 PCM만 지원해요.')
-                sample_rate = int(float(descriptor['AudioSamplingRate'].value))
-                channels = int(descriptor['Channels'].value)
-                width = int(descriptor['QuantizationBits'].value) // 8
+                stream = open_pcm_stream(mob.essence)
+                sample_rate, channels, width, available, data_offset = pcm_layout(descriptor, stream)
                 first = round(start * sample_rate)
                 frames = round(duration * sample_rate)
-                if not 8000 <= sample_rate <= 192000 or first < 0 or frames < 1 or first + frames > int(descriptor.length):
+                if first < 0 or frames < 1 or first + frames > available:
+                    stream.close()
                     raise ValueError('AAF 오디오 샘플 범위를 확인해 주세요.')
                 filename = 'essence-%d.wav' % len(extracted)
-                stream = open_pcm_stream(mob.essence)
-                stream.seek(first * channels * width)
+                stream.seek(data_offset + first * channels * width)
                 remaining = frames * channels * width
                 import shutil
                 if shutil.disk_usage(root).free < remaining + 512 * 1024**2:
@@ -166,7 +218,7 @@ def inspect_job(root):
             extracted[key] = (filename, start)
             return extracted[key]
 
-        def flatten(seg, rate, window, duration, dest, clips, depth=0):
+        def flatten(seg, rate, window, duration, dest, clips, depth=0, source_gain=1.0):
             if depth > 20:
                 raise ValueError('AAF의 참조 구조가 너무 복잡해요.')
             kind = seg.__class__.__name__
@@ -180,8 +232,17 @@ def inspect_job(root):
                     length = Fraction(child.length) / rate
                     lo, hi = max(cursor, window), min(cursor + length, window + duration)
                     if hi > lo:
-                        flatten(child, rate, lo - cursor, hi - lo, dest + lo - window, clips, depth + 1)
+                        flatten(child, rate, lo - cursor, hi - lo, dest + lo - window, clips, depth + 1, source_gain)
                     cursor += length
+                return
+            if kind == 'OperationGroup':
+                inputs, parameters = list(seg.segments), list(seg.parameters)
+                if str(seg.operation.auid) != '9d2ea894-0968-11d3-8a38-0050040ef7d2' or len(inputs) != 1 or len(parameters) != 1 or parameters[0].__class__.__name__ != 'ConstantValue' or str(parameters[0].parameterdef.auid) != 'e4962321-2267-11d3-8a4c-0050040ef7d2':
+                    raise ValueError('이 AAF 효과는 아직 지원하지 않아요. 고정 Audio Gain만 읽을 수 있어요.')
+                amplitude = float(parameters[0].value)
+                if not math.isfinite(amplitude) or amplitude < 0 or amplitude * source_gain > 1e6:
+                    raise ValueError('AAF 클립 게인 값을 확인해 주세요.')
+                flatten(inputs[0], rate, window, duration, dest, clips, depth + 1, source_gain * amplitude)
                 return
             if kind != 'SourceClip':
                 raise ValueError('아직 지원하지 않는 AAF 편집 요소가 있어요: ' + kind + '. 전환·플러그인·속도 변경을 렌더링한 PCM AAF를 사용해 주세요.')
@@ -204,9 +265,9 @@ def inspect_job(root):
                 clip_count[0] += 1
                 if clip_count[0] > MAX_CLIPS:
                     raise ValueError('오디오 클립은 %d개까지 지원해요.' % MAX_CLIPS)
-                clips.append({'file': filename, 'sourceStart': float(source_start), 'originalSourceStart': float(original_start), 'start': float(dest), 'duration': float(duration)})
+                clips.append({'file': filename, 'sourceStart': float(source_start), 'originalSourceStart': float(original_start), 'start': float(dest), 'duration': float(duration), 'sourceGain': source_gain})
             else:
-                flatten(slot.segment, source_rate, source_start, duration, dest, clips, depth + 1)
+                flatten(slot.segment, source_rate, source_start, duration, dest, clips, depth + 1, source_gain)
 
         for slot in comp.slots:
             if slot.media_kind != 'Sound':
@@ -310,7 +371,7 @@ def mix(root, inputs, output, duration, duck=None, limit=True, codec='pcm_s16le'
         ff('-f', 'lavfi', '-i', 'anullsrc=r=48000:cl=stereo', '-t', duration, '-c:a', codec, root / output)
         return
     labels = ''.join('[a%d]' % i for i in range(len(inputs)))
-    filters.append(labels + 'amix=inputs=%d:normalize=0:dropout_transition=0,apad,atrim=0:%f[m]' % (len(inputs), duration))
+    filters.append(labels + 'amix=inputs=%d:normalize=0:dropout_transition=0[m]' % len(inputs))
     if duck:
         args += ['-i', str(root / duck)]
         filters.append('[m][%d:a]sidechaincompress=threshold=0.04:ratio=3:attack=15:release=300:makeup=1[d]' % len(inputs))
@@ -318,7 +379,7 @@ def mix(root, inputs, output, duration, duck=None, limit=True, codec='pcm_s16le'
     else:
         last = '[m]'
     filters.append(last + ('alimiter=limit=0.89:level=0:latency=1,' if limit else '') + 'apad,atrim=end_sample=%d[out]' % round(duration * RATE))
-    ff(*args, '-filter_complex', ';'.join(filters), '-map', '[out]', '-t', duration, '-ar', RATE, '-c:a', codec, root / output)
+    ff(*args, '-filter_complex', ';'.join(filters), '-map', '[out]', '-ar', RATE, '-c:a', codec, root / output)
 
 
 def waveform(path, duration):
@@ -336,6 +397,16 @@ def waveform(path, duration):
         return values
 
 
+def cached_pcm(path, duration):
+    try:
+        with wave.open(str(path), 'rb') as w:
+            return (w.getframerate() == RATE and w.getnchannels() == 2 and w.getsampwidth() == 2
+                    and abs(w.getnframes() - round(duration * RATE)) <= 2
+                    and path.stat().st_size >= w.getnframes() * 4)
+    except (OSError, EOFError, wave.Error):
+        return False
+
+
 def prepare_analysis(root):
     manifest = json.loads((root / 'manifest.json').read_text())
     settings = json.loads((root / 'settings.json').read_text())
@@ -347,8 +418,9 @@ def prepare_analysis(root):
             continue
         for i, clip in enumerate(track['clips']):
             name = 'analysis-%s-%d.wav' % (track['id'], i)
-            ff('-ss', clip['sourceStart'], '-i', root / clip['file'], '-t', clip['duration'], '-vn', '-ac', 2, '-ar', RATE, '-c:a', 'pcm_s16le', root / name)
-            inputs.append({'file': name, 'start': clip['start']})
+            if not cached_pcm(root / name, clip['duration']):
+                ff('-ss', clip['sourceStart'], '-i', root / clip['file'], '-t', clip['duration'], '-vn', '-ac', 2, '-ar', RATE, '-c:a', 'pcm_s16le', root / name)
+            inputs.append({'file': name, 'start': clip['start'], 'gain': 20 * math.log10(clip.get('sourceGain', 1)) if clip.get('sourceGain', 1) > 0 else -120})
     if settings.get('useDialogue'):
         inputs = [{'file': 'dialogue-approved.wav'}]
     mix(root, inputs, 'analysis-original.wav', manifest['duration'])
@@ -385,7 +457,8 @@ def render(root):
             raw, processed = base + '-raw.wav', base + '-clean.wav'
             if not (root / raw).exists():
                 ff('-ss', clip['sourceStart'], '-i', source_root / clip['file'], '-t', clip['duration'], '-vn', '-ac', 2, '-ar', RATE, '-c:a', 'pcm_s16le', root / raw)
-            dry.append({'file': raw, 'start': clip['start']})
+            source_gain_db = 20 * math.log10(clip.get('sourceGain', 1)) if clip.get('sourceGain', 1) > 0 else -120
+            dry.append({'file': raw, 'start': clip['start'], 'gain': source_gain_db})
             if role == 'dialogue' and settings.get('clean', True):
                 if not (root / processed).exists():
                     stats = ff('-i', root / raw, '-af', 'volumedetect', '-f', 'null', '-')
@@ -395,9 +468,9 @@ def render(root):
                     if peak and float(peak.group(1)) >= -0.1:
                         warnings.append(track['name'] + ': 원본에 피크가 높은 구간이 있어요. 찌그러진 소리가 복원됐는지 직접 확인해 주세요.')
                     ff('-i', root / raw, '-af', 'highpass=f=65,afftdn=nr=6:nf=-50:tn=1,volume=%fdB,acompressor=threshold=0.18:ratio=1.5:attack=20:release=200:makeup=1,alimiter=limit=0.89:level=0:latency=1' % gain, '-ac', 2, '-ar', RATE, '-c:a', 'pcm_s16le', root / processed)
-                wet.append({'file': processed, 'start': clip['start']})
+                wet.append({'file': processed, 'start': clip['start'], 'gain': source_gain_db})
             else:
-                wet.append({'file': raw, 'start': clip['start']})
+                wet.append({'file': raw, 'start': clip['start'], 'gain': source_gain_db})
         dryfile, wetfile = track['id'] + '-original.wav', track['id'] + '.wav'
         mix(root, dry, dryfile, duration)
         mix(root, wet, wetfile, duration)
