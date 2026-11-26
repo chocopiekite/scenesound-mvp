@@ -139,3 +139,12 @@ Render 무료 작업 서버와 기존 Vercel 사이트를 연결합니다. 홈�
 - [Gemini 영상 이해](https://ai.google.dev/gemini-api/docs/generate-content/video-understanding?hl=ko)
 - [Vercel 함수 요청 크기 제한](https://vercel.com/docs/functions/limitations)
 - [Supabase RLS](https://supabase.com/docs/guides/database/postgres/row-level-security)
+
+
+## 대사 원본 편집용 웹 경로 · 2026-11-27
+
+- 씬별 기준 클립을 직접 선택하거나 자동 선택한다. 유효 3초 숏텀 −24 LUFS와 음성 추정 true peak −15~−10 dBTP를 고정 게인으로 함께 만족하는 기준을 먼저 조정한다. 조건이 없으면 원래 게인을 유지하고 알린다.
+- 이후 클립은 독립적인 목표 음량을 다시 강제하지 않고 조정된 기준의 깨끗한 룸톤에 맞춘다. 음색이 크게 다르거나 판단이 불확실하면 무작정 RMS만 맞추지 않고 원래 게인을 유지/확인 대상으로 남긴다.
+- 대사·불확실 음성 앞뒤 보호 구간을 피하고 안전한 룸톤 핸들에서만 네이티브 페이드를 제안한다. 겹침 원본 PCM 샘플이 같으면 equal-gain, 서로 다른 깨끗한 룸톤은 equal-power 후보로 만들어 청취 확인을 요청한다. 안전 여유가 없으면 보류한다.
+- 원본 내장 미디어와 개별 클립의 원래 사용 구간·타임라인 싱크는 보존한다. 원본 오디오에 처리를 굽지 않고 정적 클립게인·페이드 정보가 있는 AAF를 제공한다. 웹 A/B 미리듣기는 그 최종 AAF를 읽어 별도로 만든다.
+- 입문자용 자동 클리닝·디클립·통 WAV는 별도 제품 흐름 후보다. 이번 원본 편집용 경로에서 노이즈 제거/디클립을 했다고 표시하지 않는다.

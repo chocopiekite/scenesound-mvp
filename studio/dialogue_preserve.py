@@ -110,9 +110,12 @@ def inventory(f, engine):
             row = {'track': tid, 'name': str(slot.name or '오디오 %d' % slot.slot_id)[:100], 'slotId': slot.slot_id,
                    'componentIndex': ci, 'clip': index + 1, 'start': float(Fraction(cursor) / rate), 'duration': float(seconds),
                    'sourceId': str(mob.mob_id), 'sourceStart': str(start), 'first': first, 'frames': frames,
-                   'layout': layout, 'sourceGain': effective_gain, 'topGain': top_gain}
+                   'layout': layout, 'sourceGain': effective_gain, 'topGain': top_gain,
+                   'timelineTicks': cursor, 'lengthTicks': component.length, 'editRate': str(rate),
+                   'topSourceId': str(leaf.mob_id), 'topSourceSlot': leaf.slot_id, 'topSourceStart': leaf.start,
+                   'topRate': str(Fraction(str(leaf.slot.edit_rate))), 'sourceName': str(leaf.mob.name or '')[:160]}
             rows.append(row)
-            clips.append({'start': row['start'], 'duration': row['duration'], 'componentIndex': ci})
+            clips.append({'start': row['start'], 'duration': row['duration'], 'componentIndex': ci, 'clip': index + 1, 'name': row['sourceName']})
             index += 1
             cursor += component.length
         if clips:
@@ -156,6 +159,9 @@ def snapshot(comp):
         for c in slot.segment.components:
             leaf, _ = ungroup(c)
             data = {'kind': leaf.__class__.__name__, 'length': leaf.length}
+            if leaf.__class__.__name__ == 'Transition':
+                curve = list(leaf['OperationGroup'].value.parameters)[0]
+                data.update(cutPoint=leaf.cutpoint, curve=str(curve.interpolationdef.auid))
             if leaf.__class__.__name__ == 'SourceClip':
                 data.update(start=leaf.start, source=str(leaf.mob_id), slot=leaf.slot_id)
             components.append(data)
@@ -167,8 +173,9 @@ def snapshot(comp):
 def extract(mob, row, path, engine, context=False):
     rate, channels, width, available, data_offset = row['layout']
     first, frames = row['first'], row['frames']
-    lead = min(first, round(.32 * rate)) if context else 0
-    count = min(available - first + lead, frames + lead + (round(.32 * rate) if context else 0))
+    seconds = .32 if context is True else float(context or 0)
+    lead = min(first, round(seconds * rate))
+    count = min(available - first + lead, frames + lead + round(seconds * rate))
     stream = engine.open_pcm_stream(mob.essence)
     stream.seek(data_offset + (first - lead) * channels * width)
     remaining, digest, silent = count * channels * width, hashlib.sha256(), True
@@ -187,7 +194,9 @@ def extract(mob, row, path, engine, context=False):
 
 
 def render_dialogue(source, engine):
-    from dialogue import clip_gain, measure
+    from dialogue import measure
+    import dialogue_reference as reference
+    import dialogue_fades as fades
     root = source / ('render-' + uuid4().hex)
     root.mkdir(mode=0o700)
     settings = json.loads((source / 'settings.json').read_text())
@@ -197,7 +206,7 @@ def render_dialogue(source, engine):
         engine.save(source / 'progress.json', {'stage': stage})
     progress('원본 AAF 구조와 내장 미디어를 확인하고 있어요.')
     analyzer = Analyzer()
-    duplicates, silences, adjustments, seen, cache, dry, wet, removed = [], [], [], {}, {}, [], [], set()
+    duplicates, silences, adjustments, seen, cache, dry, removed = [], [], [], {}, {}, [], set()
     with aaf2.open(str(original), 'r') as f:
         comp, tracks, rows, duration, empty = inventory(f, engine)
         before = snapshot(comp)
@@ -232,56 +241,28 @@ def render_dialogue(source, engine):
                 removed.add((row['slotId'], row['componentIndex']))
                 continue
             seen[key] = row['name']
-            _, _, lead = extract(mob, row, context, engine, context=True)
+            _, _, lead = extract(mob, row, context, engine, context=2)
             cache_key = (pcm_hash, digest_file(context), row['sourceGain'])
             if cache_key not in cache:
                 info = analyzer.classify(context, row['duration'], lead, row['sourceGain'])
-                gain, limited = 0.0, False
                 level = {'lufs': None, 'metric': None, 'truePeakDbtp': None}
                 if info['category'] == 'speech':
                     level = analyzer.levels(path, info['speech'], row['sourceGain'], engine)
-                    lufs, peak = level['lufs'], level['truePeakDbtp']
-                    if lufs is not None and peak is not None:
-                        gain = clip_gain(lufs, peak)
-                    elif peak is not None:
-                        gain = -12.5 - peak
-                    # Constant clip gain cannot reduce a loud non-speech event
-                    # separately. Protect that clip and report the conflict.
-                    total_peak = measure(engine, path)['input_tp']
-                    if row['sourceGain'] > 0 and math.isfinite(total_peak):
-                        total_peak += 20 * math.log10(row['sourceGain'])
-                        if total_peak + gain > -1:
-                            gain, limited = -1 - total_peak, True
-                    if row['topGain'] > 0:
-                        gain = max(-144 - 20 * math.log10(row['topGain']), min(36 - 20 * math.log10(row['topGain']), gain))
-                cache[cache_key] = {**info, 'before': level, 'finalGainDb': gain, 'speechSafetyLimited': limited}
+                total_peak = measure(engine, path)['input_tp']
+                if row['sourceGain'] > 0 and math.isfinite(total_peak):
+                    total_peak += 20 * math.log10(row['sourceGain'])
+                else:
+                    total_peak = None
+                cache[cache_key] = {**info, 'before': level, 'totalPeakDbtp': total_peak,
+                                    'finalGainDb': 0., 'speechSafetyLimited': False}
             item = {**row, **cache[cache_key]}
-            item['method'] = 'speechWindows' if item['category'] == 'speech' else 'preserveUncertain' if item['category'] == 'review' else 'noiseHoldNoReference'
             adjustments.append(item)
         path.unlink(missing_ok=True)
         context.unlink(missing_ok=True)
         scenes = settings.get('scenes') or [{'start': 0, 'title': '전체'}]
-        def scene(row):
-            return sum(row['start'] >= s['start'] for s in scenes) - 1
-        for row in adjustments:
-            if row['category'] != 'noise':
-                continue
-            start, end = row['start'], row['start'] + row['duration']
-            candidates = [x for x in adjustments if x['slotId'] == row['slotId'] and scene(x) == scene(row) and x['category'] == 'speech']
-            # A duplicate anchor may have moved to a different original track.
-            # Use only retained, actually audible references.
-            previous = [x for x in candidates if 0 <= start - x['start'] - x['duration'] <= 5.001]
-            following = [x for x in candidates if 0 <= x['start'] - end <= 5.001]
-            references = []
-            for side, group in [('before', previous), ('after', following)]:
-                if not group:
-                    continue
-                ref = max(group, key=lambda x: x['start']) if side == 'before' else min(group, key=lambda x: x['start'])
-                floor = ref['noiseTailDbfs'] if side == 'before' else ref['noiseHeadDbfs']
-                if floor is not None:
-                    references.append(floor + ref['finalGainDb'])
-            gain, method, target, limited = matching_gain(row['noiseFloorDbfs'], references)
-            row.update(finalGainDb=gain, method=method, noiseTargetDbfs=target, noiseMatchLimited=limited)
+        progress('기준 대사를 먼저 맞추고, 나머지 클립을 그 룸톤에 연결하고 있어요.')
+        references = reference.apply(adjustments, scenes, settings)
+        fade_plans, fade_skips = fades.plan(f, adjustments, scenes, engine, settings.get('fades', True))
         progress('원본 클립의 위치를 유지하며 게인 정보와 비교 음원을 만들고 있어요.')
         for row in adjustments:
             row['after'] = {'lufs': row['before']['lufs'] + row['finalGainDb'] if row['before']['lufs'] is not None else None,
@@ -289,7 +270,6 @@ def render_dialogue(source, engine):
                             'metric': row['before']['metric']}
         # Preview PCM is separate from original media in the AAF. Never feed a
         # denoised or resampled preview back into the AAF exporter.
-        by_position = {(r['slotId'], r['componentIndex']): r for r in adjustments}
         for i, row in enumerate(selected):
             path = root / 'used.wav'
             extract(source_mobs[row['sourceId']], row, path, engine)
@@ -297,18 +277,18 @@ def render_dialogue(source, engine):
             engine.ff('-i', path, '-ar', 48000, '-ac', 2, '-c:a', 'pcm_s16le', root / name)
             base_gain = 20 * math.log10(row['sourceGain']) if row['sourceGain'] > 0 else -144
             dry.append({'file': name, 'start': row['start'], 'gain': base_gain})
-            item = by_position.get((row['slotId'], row['componentIndex']))
-            if item:
-                wet.append({'file': name, 'start': row['start'], 'gain': base_gain + item['finalGainDb']})
         path.unlink(missing_ok=True)
         engine.mix(root, dry, 'original.wav', duration, limit=False)
-        engine.mix(root, wet, 'mix.wav', duration, limit=False)
+        # Release per-clip dry scratch before rendering native AAF wet preview.
+        for entry in root.glob('dry-*.wav'):
+            entry.unlink()
     # Clone on APFS; bounded stream copy elsewhere. The input is never opened rw.
     if sys_platform() == 'darwin':
         subprocess.run(['/bin/cp', '-c', str(original), str(output)], check=True)
     else:
         shutil.copyfile(original, output)
-    progress('완전 중복·완전 무음을 정리하고 클립 게인만 기록하고 있어요.')
+    progress('원본 사본에 기준 게인·룸톤 매칭·편집 가능한 페이드를 기록하고 있어요.')
+    by_position = {(r['slotId'], r['componentIndex']): r for r in adjustments}
     expected = json.loads(json.dumps(before))
     empty_slots = set()
     for slot in expected:
@@ -363,60 +343,71 @@ def render_dialogue(source, engine):
         for i in range(len(comp.slots) - 1, -1, -1):
             if comp.slots[i].slot_id in empty_slots:
                 comp.slots.pop(i)
+        fades.apply(f, adjustments, fade_plans)
     progress('원본 미디어와 남은 클립의 위치·게인을 다시 확인하고 있어요.')
     with aaf2.open(str(output), 'r') as f:
         comp = next(f.content.toplevel())
-        if snapshot(comp) != expected:
+        actual = snapshot(comp)
+        affected = {p['slotId'] for p in fade_plans}
+        if [s for s in actual if s['id'] not in affected] != [s for s in expected if s['id'] not in affected]:
             raise ValueError('원본 클립 배치 검증에 실패해 AAF를 제공하지 않았어요.')
+        for slot in actual:
+            if slot['id'] in affected and slot['length'] != next(s['length'] for s in expected if s['id'] == slot['id']):
+                raise ValueError('페이드 이후 타임라인 길이 검증에 실패했어요.')
+        fades.verify(comp, adjustments, fade_plans)
         if {str(e.mob_id): digest_stream(e, engine) for e in f.content.essencedata} != media_hashes:
             raise ValueError('원본 미디어 일치 검증에 실패해 AAF를 제공하지 않았어요.')
-        slots = {s.slot_id: s for s in comp.slots}
-        for row in adjustments:
-            _, value = ungroup(slots[row['slotId']].segment.components[row['componentIndex']])
-            if abs(value - float(Fraction(row['exportAmplitude']))) > 1e-9:
-                raise ValueError('클립 게인 저장 검증에 실패했어요.')
+        progress('최종 AAF의 게인·페이드를 읽어 비교 음원을 만들고 있어요.')
+        fades.preview(f, root, adjustments, fade_plans, engine, duration)
     for entry in root.glob('dry-*.wav'):
         entry.unlink()
-    before_levels = [r['before']['lufs'] for r in adjustments if r['category'] == 'speech' and r['before']['lufs'] is not None]
-    after_levels = [r['after']['lufs'] for r in adjustments if r['category'] == 'speech' and r['after']['lufs'] is not None]
+    ready_references = [r for r in references if r['ready']]
+    before_levels = [r['before']['lufs'] for r in ready_references]
+    after_levels = [r['after']['lufs'] for r in ready_references]
     for r in adjustments:
         peak = r['after']['truePeakDbtp']
         r['peakReached'] = peak is not None and -15.15 <= peak <= -9.85
         r['loudnessReached'] = r['after']['lufs'] is not None and abs(r['after']['lufs'] + 24) <= .5
-        r['targetReached'] = r['category'] == 'speech' and r['peakReached'] and r['loudnessReached']
-        r['needsReview'] = (r['category'] == 'review' or r.get('speechSafetyLimited', False) or r.get('noiseMatchLimited', False)
-                            or 'Hold' in r['method'] or (r['category'] == 'speech' and not r['targetReached']))
-    report = {'normalizationMode': 'preservedClipGainV1', 'exportMode': 'preservedClipGain', 'targetLufs': -24, 'peakRangeDbtp': [-15, -10],
+        r['targetReached'] = r['method'] == 'referenceSpeech' and r['peakReached'] and r['loudnessReached']
+        r['needsReview'] = (r['method'] not in ['referenceSpeech', 'referenceRoomtone']
+                            or r.get('speechSafetyLimited', False) or r.get('roomtoneMatchLimited', False)
+                            or abs(r.get('roomtoneValidationGapDb', 0)) > 2)
+        # Inference-only handle masks need not be sent to the browser.
+        for field in ['protectedContext', 'layout', 'topSourceId', 'topSourceSlot', 'topSourceStart', 'topRate',
+                      'timelineTicks', 'lengthTicks', 'editRate', 'first', 'frames', 'sourceId', 'sourceStart', 'sourceGain', 'topGain']:
+            r.pop(field, None)
+    report = {'normalizationMode': 'referenceRoomtoneV4', 'exportMode': 'preservedClipGain', 'targetLufs': -24, 'peakRangeDbtp': [-15, -10],
               'duplicates': duplicates, 'silences': silences, 'removedEmptyTracks': len(empty_slots), 'removedDuplicateTracks': 0,
               'originalClips': len(rows), 'retainedClips': len(rows) - len(removed), 'processedClips': len(adjustments),
-              'categories': dict(Counter(r['category'] for r in adjustments)), 'noiseMatched': sum(r['method'] == 'noiseFloorMatch' for r in adjustments),
-              'needsReview': sum(r['needsReview'] for r in adjustments), 'adjustments': adjustments, 'scenes': scenes,
+              'categories': dict(Counter(r['category'] for r in adjustments)), 'noiseMatched': sum(r['method'] == 'referenceRoomtone' for r in adjustments),
+              'needsReview': sum(r['needsReview'] for r in adjustments) + sum(p['needsReview'] for p in fade_plans) + sum(not r['ready'] for r in references), 'adjustments': adjustments, 'scenes': scenes,
               'clipBeforeLufs': statistics.median(before_levels) if before_levels else None,
               'clipAfterLufs': statistics.median(after_levels) if after_levels else None,
-              'targetReached': all(not r['needsReview'] for r in adjustments), 'mediaStreamsVerified': len(media_hashes),
-              'sourcePreserved': True, 'clipPositionsVerified': True, 'sceneRegrouping': False}
+              'targetReached': all(r['ready'] for r in references) and all(not r['needsReview'] for r in adjustments) and not any(p['needsReview'] for p in fade_plans), 'mediaStreamsVerified': len(media_hashes),
+              'sourcePreserved': True, 'clipPositionsVerified': True, 'sceneRegrouping': False,
+              'references': references, 'fades': fade_plans, 'fadeSkips': fade_skips}
     engine.save(root / 'dialogue-report.json', report)
     with (root / 'dialogue-review.csv').open('w', encoding='utf-8-sig', newline='') as f:
         writer = csv.writer(f)
-        writer.writerow(['트랙', '클립', '시작 초', '구분', '게인 dB', '방식', '확인 필요'])
+        writer.writerow(['트랙', '클립', '시작 초', '구분', '게인 dB', '방식', '확인 필요', '기준 클립'])
         for r in adjustments:
-            writer.writerow([r['name'], r['clip'], r['start'], {'speech': '대사 후보', 'noise': '배경 노이즈 후보', 'review': '확인 필요'}[r['category']], round(r['finalGainDb'], 3), r['method'], r['needsReview']])
+            writer.writerow([r['name'], r['clip'], r['start'], {'speech': '대사 후보', 'noise': '배경 노이즈 후보', 'review': '확인 필요'}[r['category']], round(r['finalGainDb'], 3), r['method'], r['needsReview'], r.get('referenceKey') or ''])
     result_tracks = []
     for track in tracks:
         if track['slotId'] in empty_slots:
             continue
         result_tracks.append({**track, 'role': 'dialogue' if settings['roles'].get(track['id']) == 'dialogue' else 'original',
                               'clips': [c for c in track['clips'] if (track['slotId'], c['componentIndex']) not in removed]})
-    warnings = ['AAF는 원본 미디어·개별 클립·소스·위치를 유지하고 클립 게인 정보만 바꿔요. 원본 업로드 파일은 수정하지 않아요.',
-                '완전 중복은 같은 위치·길이·원본 PCM·게인이 같은 경우만 제외하고, 완전 무음은 모든 샘플이 0인 경우만 제외해요.',
-                '대사·배경 구분은 로컬 모델의 제안이에요. 속삭임·숨소리·웃음·음악 등은 청취로 확인해 주세요.',
-                '노이즈는 같은 트랙의 가까운 배경 RMS를 참고해 −12~+3dB 범위에서 맞춰요. 기준이 없거나 서로 다르면 원래 게인을 유지해요.',
-                '대사 구간 피크를 우선하며 클립 게인은 일정해요. 큰 잡음과 대사가 섞이면 안전 제한으로 목표에 못 미칠 수 있어요.',
-                'Pro Tools에서 Import Clip Gain을 켜세요. WAV는 비교 미리 듣기용이며 AAF의 원본 오디오를 대체하지 않아요.',
-                '씬별 트랙 재배치는 하지 않아요. 원본 트랙 배치를 유지해요.']
+    warnings = ['기준 클립만 −24 LUFS(유효 3초 창 대표값)·음성 피크 −15~−10 dBTP를 맞추고, 나머지는 그 룸톤에 맞춰요.',
+                '조건에 맞는 기준이 없으면 해당 씬의 원래 게인을 유지해요. 기준 클립·씬 경계를 확인해 주세요.',
+                '원본 내장 미디어·개별 클립·원래 사용 구간과 싱크를 보존해요. 페이드에 필요한 안전한 핸들만 확장해요.',
+                '같은 원본 샘플이 겹치면 equal-gain을 써요. 서로 다른 룸톤은 안전한 잡음 구간만 equal-power 후보로 만들고 청취 확인이 필요해요.',
+                '음성·액팅 여부는 자동 제안이에요. 불확실하거나 페이드 여유가 부족하면 원본을 유지하고 보류 내역을 남겨요.',
+                '노이즈 제거·디클립은 하지 않아요. Pro Tools에서 Import Clip Gain을 켜세요. WAV는 최종 AAF를 읽어 만든 비교용이에요.',
+                '씬 경계는 기준/룸톤 비교 범위를 나눠요. 트랙을 씬별로 재배치하지는 않아요.']
     result = {'mode': 'dialogue', 'exportMode': 'preservedClipGain', 'renderDirectory': root.name, 'duration': duration,
               'tracks': result_tracks, 'assets': [], 'roles': settings['roles'], 'report': report, 'warnings': warnings,
-              'summary': '원본 클립 보존 · 중복·완전 무음 정리 · 음성/배경별 클립 게인',
+              'summary': '원본 보존 · 기준 대사 → 룸톤 매칭 → 편집 가능한 페이드',
               'files': ['dialogue-clips.aaf', 'dialogue-review.csv', 'dialogue-report.json']}
     for src, dst in [('mix.wav', 'dialogue-approved.wav'), ('original.wav', 'dialogue-original.wav')]:
         (root / src).replace(source / dst)

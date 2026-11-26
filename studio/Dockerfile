@@ -3,7 +3,7 @@ RUN apt-get update && apt-get install -y --no-install-recommends python3 python3
 WORKDIR /app
 COPY studio/requirements.txt /app/studio/requirements.txt
 RUN python3 -m venv /app/.venv-studio && /app/.venv-studio/bin/pip install --no-cache-dir -r /app/studio/requirements.txt
-COPY studio/engine.py studio/dialogue.py studio/dialogue_preserve.py studio/speech.py studio/file-upload.cjs studio/storage.cjs studio/editor-model.js studio/server.cjs studio/worker.cjs /app/studio/
+COPY studio/engine.py studio/dialogue.py studio/dialogue_preserve.py studio/dialogue_reference.py studio/dialogue_fades.py studio/speech.py studio/file-upload.cjs studio/storage.cjs studio/editor-model.js studio/server.cjs studio/worker.cjs /app/studio/
 COPY scripts/fetch-vad-model.py /app/scripts/fetch-vad-model.py
 RUN /app/.venv-studio/bin/python /app/scripts/fetch-vad-model.py
 COPY studio/VAD-LICENSE.txt /app/studio/VAD-LICENSE.txt

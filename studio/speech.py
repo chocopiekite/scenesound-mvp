@@ -96,7 +96,19 @@ class Analyzer:
             flatness = float(np.median([np.exp(np.mean(np.log(z))) / np.mean(z) for z in spectra])) if spectra else 0
             if span is None or span > 12 or flatness < .005 or floor(noise) is None:
                 category = 'review'
+        profile = roomtone_profile(signal, pp, tt, regions, np)
+        protected = []
+        for i, probability in enumerate(probabilities):
+            if probability < .15:
+                continue
+            a, b = float(i * .032 - lead - .15), float(i * .032 - lead + .182)
+            if protected and a <= protected[-1][1]:
+                protected[-1][1] = b
+            else:
+                protected.append([a, b])
         return {'category': category, 'speech': regions, 'speechSeconds': total, 'maxSpeechProbability': peakp,
+                'roomtone': profile, 'protectedContext': protected, 'contextLead': lead,
+                'contextTail': max(0, len(x) / 16000 - lead - duration),
                 'noiseFloorDbfs': floor(noise), 'noiseHeadDbfs': floor([z for z in noise if z[0] <= min(1, duration)]),
                 'noiseTailDbfs': floor([z for z in noise if z[0] >= max(0, duration - 1)])}
 
@@ -138,3 +150,40 @@ class Analyzer:
                 raise ValueError('대사 피크를 측정하지 못했어요.')
         tp = 20 * math.log10(peak) if peak > 0 else None
         return {'lufs': level, 'metric': 'shortTerm' if k == 'S' and vals else 'momentary' if vals else 'peakOnly', 'truePeakDbtp': tp}
+
+
+def roomtone_profile(signal, probabilities, times, regions, np):
+    """Bounded 100ms clean windows; disjoint calibration/validation frames."""
+    count = len(signal) // 1600
+    if count < 4:
+        return None
+    indices = sorted(set(np.linspace(0, count - 1, min(512, count), dtype=int).tolist()
+                         + list(range(min(10, count))) + list(range(max(0, count - 10), count))))
+    frames = []
+    for i in indices:
+        a, b = i * .1, (i + 1) * .1
+        if any(a < hi + .15 and b > lo - .15 for lo, hi in regions):
+            continue
+        lo = max(0, int(np.searchsorted(times, a - .032, side='right')))
+        hi = int(np.searchsorted(times, b, side='left'))
+        if hi <= lo or float(np.max(probabilities[lo:hi])) >= .15:
+            continue
+        x = signal[i * 1600:(i + 1) * 1600].astype(np.float64)
+        db = 20 * math.log10(max(float(np.sqrt(np.mean(x * x))), 1e-12))
+        if not -90 < db < -25:
+            continue
+        power = np.abs(np.fft.rfft(x * np.hanning(len(x)))) ** 2
+        freq = np.fft.rfftfreq(len(x), 1 / 16000)
+        bands = [float(np.sum(power[(freq >= lo) & (freq < hi)])) for lo, hi in [(80, 250), (250, 1000), (1000, 4000), (4000, 8000)]]
+        frames.append((db, bands))
+    if len(frames) < 4:
+        return None
+    median = float(np.median([x[0] for x in frames]))
+    frames = [x for x in frames if abs(x[0] - median) < 6]
+    if len(frames) < 4:
+        return None
+    bands = np.median([x[1] for x in frames], axis=0)
+    bands /= max(float(np.sum(bands)), 1e-20)
+    return {'calibrationDbfs': float(np.median([x[0] for x in frames[::2]])),
+            'validationDbfs': float(np.median([x[0] for x in frames[1::2]])),
+            'frames': len(frames), 'bands': bands.tolist()}

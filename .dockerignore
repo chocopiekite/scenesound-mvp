@@ -6,6 +6,8 @@ studio/*
 !studio/engine.py
 !studio/dialogue.py
 !studio/dialogue_preserve.py
+!studio/dialogue_reference.py
+!studio/dialogue_fades.py
 !studio/speech.py
 !studio/VAD-LICENSE.txt
 !studio/server.cjs

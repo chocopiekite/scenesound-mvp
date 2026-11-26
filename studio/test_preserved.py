@@ -74,7 +74,7 @@ class PreservedTests(unittest.TestCase):
                 self.assertEqual({str(e.mob_id): preserved.digest_stream(e, engine) for e in f.content.essencedata}, media)
                 first = list(comp.slots[0].segment.components)[0]
                 leaf, gain = preserved.ungroup(first)
-                self.assertAlmostEqual(20 * math.log10(gain), 6, places=4)
+                self.assertAlmostEqual(20 * math.log10(gain), 0, places=4)
                 self.assertEqual(leaf.start, before[0]['components'][0]['start'])
                 self.assertEqual(str(leaf.mob_id), before[0]['components'][0]['source'])
                 self.assertEqual(leaf.length, 2 * 48000)
