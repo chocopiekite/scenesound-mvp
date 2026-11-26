@@ -25,3 +25,10 @@ test('dialogue reference selection is confined to selected tracks and its own sc
  assert.throws(()=>validate(manifest,{t0:'ignore'},scenes,{'0':'3:0'}));
  assert.throws(()=>validate(manifest,roles,scenes,[]));
 });
+test('automatic cleanup is separate from expert AAF settings and rejects arbitrary DSP options',()=>{
+ const validate=handler.validateAutomatic;
+ assert.deepEqual(validate({workflow:'automatic'},{}),{strength:'standard'});
+ assert.deepEqual(validate({workflow:'automatic'},{strength:'gentle'}),{strength:'gentle'});
+ assert.throws(()=>validate({preserveAaf:true},{strength:'standard'}));
+ for(const strength of ['highpass=0','aggressive',3,null,{}])assert.throws(()=>validate({workflow:'automatic'},{strength}));
+});

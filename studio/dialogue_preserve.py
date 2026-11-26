@@ -193,7 +193,7 @@ def extract(mob, row, path, engine, context=False):
     return digest.hexdigest(), silent, lead / rate
 
 
-def render_dialogue(source, engine):
+def render_dialogue(source, engine, preview_only=False):
     from dialogue import measure
     import dialogue_reference as reference
     import dialogue_fades as fades
@@ -213,14 +213,14 @@ def render_dialogue(source, engine):
         # Guard expected copy/metadata allocation before a sparse file can jump
         # beyond the free public worker's actual temporary volume budget.
         budget = int(os.environ.get('STUDIO_STORAGE_BUDGET_BYTES', 0))
-        if budget:
+        if budget and not preview_only:
             used = sum(p.stat().st_size for p in source.parent.rglob('*') if p.is_file())
             allocation = max(original.stat().st_size, len(f.cfb.fat) * f.cfb.sector_size)
             if used + allocation + duration * 48000 * 8 > budget - 64 * 1024 ** 2:
                 raise ValueError('원본 AAF 사본과 비교 음원을 만들 임시 공간이 부족해요. 이 파일은 로컬 대사 도구에서 처리해 주세요.')
         source_mobs = {str(m.mob_id): m for m in f.content.sourcemobs()}
         # All embedded streams, including unused handles, remain byte-identical.
-        media_hashes = {str(e.mob_id): digest_stream(e, engine) for e in f.content.essencedata}
+        media_hashes = {} if preview_only else {str(e.mob_id): digest_stream(e, engine) for e in f.content.essencedata}
         selected = [r for r in rows if settings['roles'].get(r['track']) == 'dialogue']
         if not selected:
             raise ValueError('처리할 대사 트랙을 하나 이상 선택해 주세요.')
@@ -274,14 +274,19 @@ def render_dialogue(source, engine):
             path = root / 'used.wav'
             extract(source_mobs[row['sourceId']], row, path, engine)
             name = 'dry-%d.wav' % i
-            engine.ff('-i', path, '-ar', 48000, '-ac', 2, '-c:a', 'pcm_s16le', root / name)
+            engine.ff('-i', path, '-ar', 48000, '-ac', 1 if preview_only else 2, '-c:a', 'pcm_f32le' if preview_only else 'pcm_s16le', root / name)
             base_gain = 20 * math.log10(row['sourceGain']) if row['sourceGain'] > 0 else -144
             dry.append({'file': name, 'start': row['start'], 'gain': base_gain})
         path.unlink(missing_ok=True)
-        engine.mix(root, dry, 'original.wav', duration, limit=False)
+        engine.mix(root, dry, 'original.wav', duration, limit=False, codec='pcm_f32le' if preview_only else 'pcm_s16le', channels=1 if preview_only else 2)
         # Release per-clip dry scratch before rendering native AAF wet preview.
         for entry in root.glob('dry-*.wav'):
             entry.unlink()
+        if preview_only:
+            fades.preview_rows(f, root, adjustments, fade_plans, engine, duration)
+            return {'renderDirectory': root.name, 'duration': duration, 'references': references,
+                    'fades': fade_plans, 'fadeSkips': fade_skips, 'duplicates': duplicates, 'silences': silences,
+                    'retainedClips': len(adjustments), 'selectedTracks': [t['name'] for t in tracks if settings['roles'].get(t['id']) == 'dialogue']}
     # Clone on APFS; bounded stream copy elsewhere. The input is never opened rw.
     if sys_platform() == 'darwin':
         subprocess.run(['/bin/cp', '-c', str(original), str(output)], check=True)

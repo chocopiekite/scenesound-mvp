@@ -190,7 +190,7 @@ def verify(comp, rows, plans):
                 raise ValueError('AAF 페이드 곡선 검증에 실패했어요.')
 
 
-def preview(f, root, rows, plans, engine, duration):
+def preview(f, root, rows, plans, engine, duration, codec='pcm_s16le', channels=2):
     """Read the final AAF, including handles/curves, for browser A/B parity."""
     from dialogue_preserve import resolve, extract
     selected = {r['slotId'] for r in rows}
@@ -217,9 +217,37 @@ def preview(f, root, rows, plans, engine, duration):
                 shape = 'tri' if str(curve.interpolationdef.auid) == LINEAR else 'squ'
                 filters.append('afade=t=%s:st=%.12f:d=%.12f:curve=%s' % (kind, float(Fraction(at - tick) / rate), float(Fraction(tr.length) / rate), shape))
             name = 'wet-%d.wav' % len(tracks)
-            engine.ff('-i', raw, '-af', ','.join(filters), '-ar', 48000, '-ac', 2, '-c:a', 'pcm_s16le', root / name)
+            engine.ff('-i', raw, '-af', ','.join(filters), '-ar', 48000, '-ac', channels, '-c:a', codec, root / name)
             tracks.append({'file': name, 'start': float(Fraction(tick) / rate), 'gain': 0}); temporary.append(root / name)
-    engine.mix(root, tracks, 'mix.wav', duration, limit=False)
+    engine.mix(root, tracks, 'mix.wav', duration, limit=False, codec=codec, channels=channels)
     (root / 'preview-source.wav').unlink(missing_ok=True)
+    for path in temporary:
+        path.unlink(missing_ok=True)
+
+
+def preview_rows(f, root, rows, plans, engine, duration):
+    """Beginner float mono preparation without copying/exporting an expert AAF."""
+    from dialogue_preserve import extract
+    incoming = {p['right']: p for p in plans}; outgoing = {p['left']: p for p in plans}
+    mobs = {str(m.mob_id): m for m in f.content.sourcemobs()}
+    tracks, temporary = [], []
+    for row in rows:
+        rate = Fraction(row['editRate']); inc, out = incoming.get(key(row)), outgoing.get(key(row))
+        lo = inc['tick'] if inc else row['timelineTicks']
+        hi = out['tick'] + out['lengthTicks'] if out else row['timelineTicks'] + row['lengthTicks']
+        extended = {**row, 'first': row['first'] + round(Fraction(lo - row['timelineTicks']) / rate * row['layout'][0]),
+                    'frames': round(Fraction(hi - lo) / rate * row['layout'][0])}
+        raw = root / 'auto-source.wav'
+        extract(mobs[row['sourceId']], extended, raw, engine)
+        amplitude = row['sourceGain'] * 10 ** (row['finalGainDb'] / 20)
+        filters = ['volume=%.12f' % amplitude]
+        for fade, kind in [(inc, 'in'), (out, 'out')]:
+            if fade:
+                filters.append('afade=t=%s:st=%.12f:d=%.12f:curve=%s' % (kind, float(Fraction(fade['tick'] - lo) / rate), fade['duration'], 'tri' if fade['samePcm'] else 'squ'))
+        name = 'auto-piece-%d.wav' % len(tracks)
+        engine.ff('-i', raw, '-af', ','.join(filters), '-ar', 48000, '-ac', 1, '-c:a', 'pcm_f32le', root / name)
+        tracks.append({'file': name, 'start': float(Fraction(lo) / rate), 'gain': 0}); temporary.append(root / name)
+    engine.mix(root, tracks, 'mix.wav', duration, limit=False, codec='pcm_f32le', channels=1)
+    (root / 'auto-source.wav').unlink(missing_ok=True)
     for path in temporary:
         path.unlink(missing_ok=True)

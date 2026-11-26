@@ -344,7 +344,7 @@ def attach_video(root):
     return manifest
 
 
-def mix(root, inputs, output, duration, duck=None, limit=True, codec='pcm_s16le'):
+def mix(root, inputs, output, duration, duck=None, limit=True, codec='pcm_s16le', channels=2):
     """inputs: file, delay seconds, gain dB. Each file is already trimmed to fit."""
     if len(inputs) > 8:
         ordered = sorted(inputs, key=lambda x: x.get('start', 0))
@@ -356,9 +356,9 @@ def mix(root, inputs, output, duration, duck=None, limit=True, codec='pcm_s16le'
                 hi = min(duration, max(x.get('start', 0) + probe(root / x['file'], allow_long=True)[1] for x in batch))
                 name = 'batch-' + uuid4().hex + '.wav'
                 intermediates.append(name)
-                mix(root, [{**x, 'start': x.get('start', 0) - lo} for x in batch], name, hi - lo, limit=False, codec='pcm_f32le')
+                mix(root, [{**x, 'start': x.get('start', 0) - lo} for x in batch], name, hi - lo, limit=False, codec='pcm_f32le', channels=channels)
                 partials.append({'file': name, 'start': lo})
-            mix(root, partials, output, duration, duck=duck, limit=limit, codec=codec)
+            mix(root, partials, output, duration, duck=duck, limit=limit, codec=codec, channels=channels)
             return
         finally:
             for name in intermediates:
@@ -366,9 +366,9 @@ def mix(root, inputs, output, duration, duck=None, limit=True, codec='pcm_s16le'
     args, filters = [], []
     for i, item in enumerate(inputs):
         args += ['-i', str(root / item['file'])]
-        filters.append('[%d:a]aresample=48000,aformat=channel_layouts=stereo,volume=%fdB,adelay=%dS:all=1[a%d]' % (i, item.get('gain', 0), round(item.get('start', 0) * RATE), i))
+        filters.append('[%d:a]aresample=48000,aformat=channel_layouts=%s,volume=%fdB,adelay=%dS:all=1[a%d]' % (i, 'mono' if channels == 1 else 'stereo', item.get('gain', 0), round(item.get('start', 0) * RATE), i))
     if not inputs:
-        ff('-f', 'lavfi', '-i', 'anullsrc=r=48000:cl=stereo', '-t', duration, '-c:a', codec, root / output)
+        ff('-f', 'lavfi', '-i', 'anullsrc=r=48000:cl=' + ('mono' if channels == 1 else 'stereo'), '-t', duration, '-c:a', codec, root / output)
         return
     labels = ''.join('[a%d]' % i for i in range(len(inputs)))
     filters.append(labels + 'amix=inputs=%d:normalize=0:dropout_transition=0[m]' % len(inputs))
@@ -547,6 +547,11 @@ def main():
     action = sys.argv[1]
     try:
         from dialogue import render_dialogue
+        if action in ['inspect-automatic', 'automatic']:
+            import automatic
+            result = automatic.inspect_job(root, sys.modules[__name__]) if action == 'inspect-automatic' else automatic.render(root, sys.modules[__name__])
+            print(json.dumps(result, ensure_ascii=False))
+            return
         result = __import__('dialogue_preserve').inspect_job(root, sys.modules[__name__]) if action == 'inspect-dialogue' else render_dialogue(root, sys.modules[__name__]) if action == 'dialogue' else attach_video(root) if action == 'attach-video' else inspect_job(root) if action == 'inspect' else render(root) if action == 'render' else prepare_analysis(root) if action == 'prepare' else None
         if result is None:
             raise ValueError('지원하지 않는 작업이에요.')

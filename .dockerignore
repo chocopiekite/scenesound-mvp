@@ -4,6 +4,7 @@ studio/*
 !studio/Dockerfile
 !studio/requirements.txt
 !studio/engine.py
+!studio/automatic.py
 !studio/dialogue.py
 !studio/dialogue_preserve.py
 !studio/dialogue_reference.py

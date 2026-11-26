@@ -57,7 +57,7 @@ def apply(rows, scenes, settings):
         anchor.update(finalGainDb=gain, method='referenceSpeech', referenceKey=refkey)
         reference = {'sceneIndex': i, 'title': scene['title'], 'ready': True, 'key': refkey,
                      'name': anchor.get('sourceName', anchor['name']), 'track': anchor['name'], 'clip': anchor['clip'],
-                     'start': anchor['start'], 'gainDb': gain, 'before': anchor['before'],
+                     'start': anchor['start'], 'duration': anchor['duration'], 'gainDb': gain, 'before': anchor['before'],
                      'after': {'lufs': -24., 'truePeakDbtp': anchor['before']['truePeakDbtp'] + gain, 'metric': 'shortTerm'},
                      'roomtoneDbfs': target}
         references.append(reference)
