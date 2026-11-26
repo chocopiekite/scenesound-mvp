@@ -37,9 +37,9 @@ const ready=fs.mkdir(scratch,{recursive:true,mode:0o700}).then(async()=>{
 });
 function uploadLimit(role){return Math.min(maxBytes,role==='aaf'?5*1024**3:role==='video'?2*1024**3:1024**3);}
 function fail(status,message){return Object.assign(Error(message),{status});}
-async function json(req){let size=0,chunks=[];for await(const c of req){size+=c.length;if(size>128*1024)throw fail(413,'작업 설정이 너무 커요.');chunks.push(c);}try{return JSON.parse(Buffer.concat(chunks));}catch{throw fail(400,'작업 설정을 확인해 주세요.');}}
+async function json(req){let size=0,chunks=[];for await(const c of req){size+=c.length;if(size>128*1024)throw fail(413,'작업 설정이 너무 커요.');chunks.push(c);}try{return size?JSON.parse(Buffer.concat(chunks)):{};}catch{throw fail(400,'작업 설정을 확인해 주세요.');}}
 function run(action,job){return new Promise((resolve,reject)=>{
- const child=spawn(python,[path.join(__dirname,'engine.py'),action,job.dir],{stdio:['ignore','pipe','pipe']});job.child=child;let data='',errors='',storageError,checking=false;
+ const child=spawn(python,[path.join(__dirname,'engine.py'),action,job.dir],{stdio:['ignore','pipe','pipe'],env:{...process.env,STUDIO_STORAGE_BUDGET_BYTES:String(storageBudget)}});job.child=child;let data='',errors='',storageError,checking=false;
  const timer=setTimeout(()=>child.kill('SIGKILL'),120*60*1000);
  const monitor=storageBudget?setInterval(async()=>{if(checking)return;checking=true;try{await storage.check(scratch,0,storageBudget);}catch(e){storageError=e;console.warn(JSON.stringify({event:'storage_budget_stop',action,budgetBytes:storageBudget}));child.kill('SIGKILL');}finally{checking=false;}},500):null;
  function clear(){clearTimeout(timer);if(monitor)clearInterval(monitor);job.child=null;}
@@ -51,11 +51,11 @@ function run(action,job){return new Promise((resolve,reject)=>{
 async function renderJob(job,action='render'){
  let result;
  try{result=await run(action,job);return result;}finally{
-  const keep=result?.renderDirectory||job.data?.renderDirectory;
-  for(const name of await fs.readdir(job.dir))if(/^render-[0-9a-f]{32}$/.test(name)&&name!==keep)await fs.rm(path.join(job.dir,name),{recursive:true,force:true});
+  const keep=new Set([result?.renderDirectory||job.data?.renderDirectory,...(action==='dialogue'&&result?[]:[job.dialogueData?.renderDirectory])].filter(Boolean));
+  for(const name of await fs.readdir(job.dir))if(/^render-[0-9a-f]{32}$/.test(name)&&!keep.has(name))await fs.rm(path.join(job.dir,name),{recursive:true,force:true});
  }
 }
-async function mutate(job,fn){if(active)throw fail(409,'다른 작업을 처리 중이에요. 완료 후 다시 눌러 주세요.');active=true;job.busy=true;job.error=null;job.status='processing';Promise.resolve().then(fn).then(data=>{job.data=data;job.status='ready';}).catch(e=>{job.error=e.message;job.status='error';}).finally(()=>{job.busy=false;active=false;});}
+async function mutate(job,fn){if(active)throw fail(409,'다른 작업을 처리 중이에요. 완료 후 다시 눌러 주세요.');active=true;job.busy=true;job.error=null;job.status='processing';Promise.resolve().then(async()=>{await fs.rm(path.join(job.dir,'progress.json'),{force:true});return fn();}).then(data=>{job.data=data;job.status='ready';}).catch(e=>{job.error=e.message;job.status='error';}).finally(()=>{job.busy=false;active=false;});}
 function validatePlan(plan,duration){if(!plan||!Array.isArray(plan.sounds)||plan.sounds.length>60)throw fail(400,'영상 분석 결과를 확인해 주세요.');return plan.sounds.filter(s=>s.type!=='편집 팁').map(s=>{if(!['효과음','배경음'].includes(s.type)||typeof s.title!=='string'||s.title.length>200||typeof s.searchQuery!=='string'||!s.searchQuery.trim()||s.searchQuery.length>100||!Number.isFinite(s.start)||!Number.isFinite(s.end)||s.start<0||s.end<s.start||s.end>duration)throw fail(400,'추천 소리의 위치와 검색어를 확인해 주세요.');return{title:s.title,query:s.searchQuery,start:s.start,end:Math.min(duration,Math.max(s.end,s.start+.25)),role:s.type==='효과음'?'effect':'ambience'};}).filter(s=>s.start<s.end);}
 async function searchSound(query,page=1){
  const url='https://scenesound-mvp.vercel.app/api/sounds?provider=all&q='+encodeURIComponent(query)+'&page='+page;
@@ -82,12 +82,12 @@ function validateSettings(job,body){
  return{roles,clean:body.clean!==false,trackGains:gains,...(effectChannels?{effectChannels}:{}),...(body.useDialogue?{useDialogue:true}:{})};
 }
 async function serveFile(req,res,job,name){
- const allowed=new Set([...(job.uploads.filter(u=>u.role==='video').map(u=>u.file)),...(job.data?.analysisSegments||[]).map(s=>s.file),...(job.data?.tracks||[]).flatMap(t=>[t.file,t.export]),'mix.wav','original.wav','dialogue-approved.wav','dialogue-original.wav','dialogue-approved.json','dialogue-scenes.aaf','dialogue-package.zip','dialogue-report.json','analysis-reference.mp4','SceneSound.aaf','preview.mp4','credits.json','SceneSound.zip',...(job.settings?.assets||[]).map(a=>a.file)]);
+ const allowed=new Set([...(job.uploads.filter(u=>u.role==='video').map(u=>u.file)),...(job.data?.analysisSegments||[]).map(s=>s.file),...(job.data?.tracks||[]).flatMap(t=>[t.file,t.export]),'mix.wav','original.wav','dialogue-approved.wav','dialogue-original.wav','dialogue-approved.json','dialogue-scenes.aaf','dialogue-package.zip','dialogue-clips.aaf','dialogue-review.csv','dialogue-report.json','analysis-reference.mp4','SceneSound.aaf','preview.mp4','credits.json','SceneSound.zip',...(job.settings?.assets||[]).map(a=>a.file)]);
  if(!allowed.has(name)||name!==path.basename(name)||job.busy)throw fail(404,'파일을 찾을 수 없거나 처리 중이에요.');
- const upload=(job.settings?.assets||[]).some(a=>a.file===name)||(job.data?.analysisSegments||[]).some(s=>s.file===name)||['dialogue-approved.wav','dialogue-original.wav','dialogue-approved.json','dialogue-scenes.aaf','dialogue-package.zip','analysis-reference.mp4'].includes(name)||job.uploads.some(u=>u.role==='video'&&u.file===name);const p=path.join(job.dir,...(!upload&&job.data?.renderDirectory?[job.data.renderDirectory]:[]),name);const stat=await fs.stat(p);let start=0,end=stat.size-1;
+ const upload=(job.settings?.assets||[]).some(a=>a.file===name)||(job.data?.analysisSegments||[]).some(s=>s.file===name)||['dialogue-approved.wav','dialogue-original.wav','dialogue-approved.json','dialogue-scenes.aaf','dialogue-package.zip','analysis-reference.mp4'].includes(name)||job.uploads.some(u=>u.role==='video'&&u.file===name);const renderDirectory=['dialogue-clips.aaf','dialogue-review.csv','dialogue-report.json'].includes(name)?job.dialogueData?.renderDirectory||job.data?.renderDirectory:job.data?.renderDirectory;const p=path.join(job.dir,...(!upload&&renderDirectory?[renderDirectory]:[]),name);const stat=await fs.stat(p);let start=0,end=stat.size-1;
  if(req.headers.range){const m=/^bytes=(\d+)-(\d*)$/.exec(req.headers.range);if(!m)throw fail(416,'재생 범위를 확인해 주세요.');start=Number(m[1]);end=m[2]?Math.min(Number(m[2]),end):end;if(start>end||start>=stat.size)throw fail(416,'재생 범위를 확인해 주세요.');res.statusCode=206;res.setHeader('Content-Range',`bytes ${start}-${end}/${stat.size}`);}
  let audioType='application/octet-stream';if(name.endsWith('.audio')){const h=await fs.open(p,'r');try{const b=Buffer.alloc(16);await h.read(b,0,16,0);audioType=b.toString('ascii',0,4)==='RIFF'?'audio/wav':b.toString('ascii',0,4)==='OggS'?'audio/ogg':b.toString('ascii',0,4)==='fLaC'?'audio/flac':b.toString('ascii',4,8)==='ftyp'?'audio/mp4':'audio/mpeg';}finally{await h.close();}}
- res.setHeader('Accept-Ranges','bytes');res.setHeader('Content-Length',end-start+1);res.setHeader('Content-Type',name.endsWith('.wav')?'audio/wav':/\.(mp4|mov|webm)$/.test(name)?(name.endsWith('.webm')?'video/webm':'video/mp4'):name.endsWith('.json')?'application/json':audioType);if(/\.(zip|aaf)$/.test(name)||new URL(req.url,'http://worker').searchParams.get('download')==='1')res.setHeader('Content-Disposition',`attachment; filename="${name}"`);fss.createReadStream(p,{start,end}).pipe(res);
+ res.setHeader('Accept-Ranges','bytes');res.setHeader('Content-Length',end-start+1);res.setHeader('Content-Type',name.endsWith('.wav')?'audio/wav':/\.(mp4|mov|webm)$/.test(name)?(name.endsWith('.webm')?'video/webm':'video/mp4'):name.endsWith('.json')?'application/json':name.endsWith('.csv')?'text/csv; charset=utf-8':audioType);if(/\.(zip|aaf|csv)$/.test(name)||new URL(req.url,'http://worker').searchParams.get('download')==='1')res.setHeader('Content-Disposition',`attachment; filename="${name}"`);fss.createReadStream(p,{start,end}).pipe(res);
 }
 module.exports=async(req,res)=>{
  try{
@@ -99,7 +99,7 @@ module.exports=async(req,res)=>{
   if(origin&&origin!==allowedOrigin)throw fail(403,'허용되지 않은 요청이에요.');
   if(origin===allowedOrigin){res.setHeader('Access-Control-Allow-Origin',allowedOrigin);res.setHeader('Vary','Origin');res.setHeader('Access-Control-Allow-Headers','Authorization,Content-Type,Range');res.setHeader('Access-Control-Allow-Methods','GET,POST,DELETE,OPTIONS');res.setHeader('Access-Control-Expose-Headers','Content-Range,Content-Length,Accept-Ranges');}
   if(req.method==='OPTIONS'){res.statusCode=204;return res.end();}
-  if(url.pathname==='/api/studio/status'&&req.method==='GET')return res.json({ready:fss.existsSync(python),local:false,maxDuration,maxBytes,dialogueVersion:3,editorVersion:1,uploadVersion:1,storageBudgetBytes:storageBudget,maxAafBytes:uploadLimit('aaf')});
+  if(url.pathname==='/api/studio/status'&&req.method==='GET')return res.json({ready:fss.existsSync(python),local:false,maxDuration,maxBytes,dialogueVersion:4,preserveAaf:true,speechModelReady:fss.existsSync(process.env.STUDIO_VAD_MODEL||path.join(root,'.venv-studio/models/silero_vad_v5.1.2.onnx')),editorVersion:1,uploadVersion:1,storageBudgetBytes:storageBudget,maxAafBytes:uploadLimit('aaf')});
   const token=(req.headers.authorization||'').replace(/^Bearer /,'');identity=auth.verify(token,'session');
   if(!identity&&req.method==='GET'&&url.pathname.includes('/files/'))identity=auth.verify(url.searchParams.get('ticket'),'media');
   if(!identity)throw fail(401,'작업 권한이 만료됐어요. 화면을 다시 열어 주세요.');
@@ -107,7 +107,7 @@ module.exports=async(req,res)=>{
   const host=req.headers.host||'';if(!/^127\.0\.0\.1:8001$/.test(host))throw fail(403,'로컬 처리 서버에서만 사용할 수 있어요.');
   if(req.headers.origin&&req.headers.origin!=='http://127.0.0.1:8001')throw fail(403,'허용되지 않은 요청이에요.');
   if(['cross-site','same-site'].includes(req.headers['sec-fetch-site']))throw fail(403,'허용되지 않은 요청이에요.');
-  if(url.pathname==='/api/studio/status'&&req.method==='GET')return res.json({ready:fss.existsSync(python),local:true,maxDuration,maxBytes,dialogueVersion:3,editorVersion:1,uploadVersion:1,storageBudgetBytes:storageBudget,maxAafBytes:uploadLimit('aaf')});
+  if(url.pathname==='/api/studio/status'&&req.method==='GET')return res.json({ready:fss.existsSync(python),local:true,maxDuration,maxBytes,dialogueVersion:4,preserveAaf:true,speechModelReady:fss.existsSync(process.env.STUDIO_VAD_MODEL||path.join(root,'.venv-studio/models/silero_vad_v5.1.2.onnx')),editorVersion:1,uploadVersion:1,storageBudgetBytes:storageBudget,maxAafBytes:uploadLimit('aaf')});
  }
  if(url.pathname==='/api/studio/jobs'&&req.method==='POST'){
   for(const [id,j]of jobs)if(!j.busy&&Date.now()-j.created>lifetime){await fs.rm(j.dir,{recursive:true,force:true});jobs.delete(id);}
@@ -117,7 +117,7 @@ module.exports=async(req,res)=>{
   const id=randomUUID(),dir=path.join(scratch,'job-'+id);await fs.mkdir(dir,{mode:0o700});const job={id,dir,uploads:[],bytes:0,created:Date.now(),status:'uploading',owner:identity?.sid};if(publicMode)await fs.writeFile(path.join(dir,'owner.json'),JSON.stringify({sid:identity.sid}));jobs.set(id,job);return res.json({id});
  }
  const match=/^\/api\/studio\/jobs\/([0-9a-f-]{36})(?:\/(.*))?$/.exec(url.pathname);if(!match)throw fail(404,'작업을 찾을 수 없어요.');const job=jobs.get(match[1]);if(!job)throw fail(404,'작업이 만료됐어요. 파일을 다시 선택해 주세요.');if(publicMode&&(job.owner!==identity.sid||(identity.kind==='media'&&identity.jid!==job.id)))throw fail(403,'이 작업에 접근할 수 없어요.');const action=match[2]||'';
- if(req.method==='GET'&&!action)return res.json({...(publicMode?{ticket:auth.ticket(identity.sid,job.id)}:{}),id:job.id,status:job.status,error:job.error,data:job.data,manifest:job.manifest,dialogueReady:!!job.dialogueReady,dialogue:job.dialogueData,settings:job.settings?{roles:job.settings.roles,clean:job.settings.clean,deduplicate:job.settings.deduplicate,useDialogue:job.settings.useDialogue}:undefined,stage:job.stage});
+ if(req.method==='GET'&&!action){let stage=job.stage;if(job.busy)try{stage=JSON.parse(await fs.readFile(path.join(job.dir,'progress.json'),'utf8')).stage||stage;}catch{}return res.json({...(publicMode?{ticket:auth.ticket(identity.sid,job.id)}:{}),id:job.id,status:job.status,error:job.error,data:job.data,manifest:job.manifest,dialogueReady:!!job.dialogueReady,dialogue:job.dialogueData,settings:job.settings?{roles:job.settings.roles,clean:job.settings.clean,deduplicate:job.settings.deduplicate,removeSilence:job.settings.removeSilence,scenes:job.settings.scenes,useDialogue:job.settings.useDialogue}:undefined,stage});}
  if(req.method==='GET'&&action.startsWith('files/'))return await serveFile(req,res,job,action.slice(6));
  if(req.method==='DELETE'&&!action){if(job.busy||job.uploading)throw fail(409,'전송·처리 완료 후 삭제해 주세요.');await fs.rm(job.dir,{recursive:true,force:true});jobs.delete(job.id);return res.json({deleted:true});}
  if(action==='uploads'||action.startsWith('uploads/'))return await chunkUpload.handle(req,res,job,action,url,{json,uploadLimit,maxBytes,checkStorage:additional=>storage.check(scratch,additional,storageBudget)});
@@ -134,14 +134,14 @@ module.exports=async(req,res)=>{
   try{for await(const c of req){await storage.check(scratch,c.length,storageBudget);bytes+=c.length;if(bytes>uploadLimit(role)||job.bytes+bytes>maxBytes)throw fail(413,publicMode?'영상 2GB·AAF 5GB·오디오 1GB·전체 8GB 이하여야 해요.':'영상 2GB·AAF 5GB·오디오 1GB·전체 8GB 이하여야 해요.');await handle.write(c);}}catch(e){await fs.rm(path.join(job.dir,file),{force:true});throw e;}finally{await handle.close();job.uploading=false;}
   job.bytes+=bytes;job.uploads.push({role,name,file});await fs.writeFile(path.join(job.dir,'uploads.json'),JSON.stringify(job.uploads));return res.json({uploaded:true});
  }
- if(action==='inspect'){if([...job.transfers?.values()||[]].some(t=>!t.done))throw fail(409,'파일 전송이 끝난 뒤 분석해 주세요.');await mutate(job,async()=>{job.stage='AAF의 트랙·클립·연결 오디오를 읽고 있어요.';job.manifest=await run('inspect',job);return job.manifest;});return res.status(202).json({started:true});}
+ if(action==='inspect'){const inspectBody=await json(req);if([...job.transfers?.values()||[]].some(t=>!t.done))throw fail(409,'파일 전송이 끝난 뒤 분석해 주세요.');await mutate(job,async()=>{job.stage='AAF의 트랙·클립·연결 오디오를 읽고 있어요.';job.manifest=await run(inspectBody.workflow==='dialogue'?'inspect-dialogue':'inspect',job);return job.manifest;});return res.status(202).json({started:true});}
  if(!job.manifest)throw fail(409,'먼저 AAF를 읽어 주세요.');
  if(action==='attach-video'){await mutate(job,async()=>{job.stage='참조 영상을 연결하고 있어요.';job.manifest=await run('attach-video',job);return job.manifest;});return res.status(202).json({started:true});}
  const body=await json(req);
  if(action==='dialogue'){
   const config=validateSettings(job,body);if(!Object.values(config.roles).includes('dialogue'))throw fail(400,'대사 트랙을 하나 이상 선택해 주세요.');
   const scenes=body.scenes||[{start:0,title:'씬 1'}];if(!Array.isArray(scenes)||scenes.length<1||scenes.length>30||scenes.some((s,i)=>!s||!Number.isFinite(s.start)||s.start<0||s.start>=job.manifest.duration||(i===0?s.start!==0:s.start<=scenes[i-1].start)||typeof s.title!=='string'||!s.title.trim()||s.title.length>100))throw fail(400,'씬 시작 시간과 이름을 확인해 주세요. 첫 씬은 0초, 이후는 시간순이어야 해요.');
-  await mutate(job,async()=>{job.stage='대사 중복을 정리하고 클립별 숏텀과 트루피크를 측정·보정하고 있어요.';job.settings={...config,deduplicate:body.deduplicate!==false,scenes,assets:[]};await fs.writeFile(path.join(job.dir,'settings.json'),JSON.stringify(job.settings));const result=await renderJob(job,'dialogue');job.dialogueReady=true;job.dialogueData=result;return result;});return res.status(202).json({started:true});
+  await mutate(job,async()=>{job.stage='대사 중복을 정리하고 클립별 숏텀과 트루피크를 측정·보정하고 있어요.';job.settings={...config,deduplicate:body.deduplicate!==false,removeSilence:body.removeSilence!==false,clean:false,scenes,assets:[]};await fs.writeFile(path.join(job.dir,'settings.json'),JSON.stringify(job.settings));const result=await renderJob(job,'dialogue');job.dialogueReady=true;job.dialogueData=result;return result;});return res.status(202).json({started:true});
  }
  if(action==='prepare-analysis'){const config=validateSettings(job,body);await mutate(job,async()=>{job.stage='선택한 AAF 트랙을 참조 영상에 맞춰 분석용 영상을 만들고 있어요.';await fs.writeFile(path.join(job.dir,'settings.json'),JSON.stringify(config));return await run('prepare',job);});return res.status(202).json({started:true});}
  if(action==='render'){

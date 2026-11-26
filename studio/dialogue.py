@@ -58,7 +58,7 @@ def clip_gain(level, peak):
     return max(-15 - peak, min(-10 - peak, -24 - level))
 
 
-def render_dialogue(source, engine):
+def render_legacy_dialogue(source, engine):
     manifest = json.loads((source / 'manifest.json').read_text())
     settings = json.loads((source / 'settings.json').read_text())
     root = source / ('render-' + uuid4().hex)
@@ -213,3 +213,8 @@ def render_dialogue(source, engine):
         temp.replace(source / destination)
     engine.save(source / 'dialogue-approved.json', {**result, 'roles': settings['roles']})
     return result
+
+
+def render_dialogue(source, engine):
+    from dialogue_preserve import render_dialogue as preserved
+    return preserved(source, engine)

@@ -108,7 +108,7 @@ class EngineTests(unittest.TestCase):
             self.assertEqual(m['duration'], 8)
             settings = {'roles': {t['id']: 'dialogue' for t in m['tracks']}, 'clean': True, 'deduplicate': True, 'scenes': [{'start': 0, 'title': '실내 씬'}, {'start': 4 + 1 / 3000000, 'title': '복도 씬'}]}
             engine.save(root / 'settings.json', settings)
-            r = dialogue.render_dialogue(root, engine)
+            r = dialogue.render_legacy_dialogue(root, engine)
             self.assertEqual(r['report']['scenes'][1]['start'], 4)
             self.assertEqual(len(r['report']['duplicates']), 2)
             self.assertEqual(r['report']['removedDuplicateTracks'], 1)
@@ -142,7 +142,7 @@ class EngineTests(unittest.TestCase):
             # Disabling duplicate removal restores both original tracks.
             settings['deduplicate'] = False
             engine.save(root / 'settings.json', settings)
-            restored = dialogue.render_dialogue(root, engine)
+            restored = dialogue.render_legacy_dialogue(root, engine)
             self.assertEqual(len(restored['report']['duplicates']), 0)
             self.assertEqual(len(restored['tracks']), 2)
             with aaf2.open(str(root / restored['renderDirectory'] / 'SceneSound.aaf')) as f:
@@ -206,7 +206,7 @@ class EngineTests(unittest.TestCase):
             m['tracks'].append(second)
             engine.save(root / 'manifest.json', m)
             engine.save(root / 'settings.json', {'roles': {'t0': 'dialogue', 't1': 'dialogue'}, 'clean': False})
-            r = dialogue.render_dialogue(root, engine)
+            r = dialogue.render_legacy_dialogue(root, engine)
             self.assertEqual(r['report']['duplicates'], [])
             self.assertEqual(len(r['tracks']), 1)
             self.assertEqual(len(r['tracks'][0]['clips']), 3)
@@ -216,7 +216,7 @@ class EngineTests(unittest.TestCase):
                     w.setparams((1, 2, 48000, 0, 'NONE', 'not compressed'))
                     w.writeframes(bytes(8 * 48000 * 2))
             with self.assertRaisesRegex(ValueError, '측정 가능한'):
-                dialogue.render_dialogue(root, engine)
+                dialogue.render_legacy_dialogue(root, engine)
 
     def test_manual_sound_channels_are_separate_in_wav_and_aaf(self):
         with tempfile.TemporaryDirectory(prefix='scenesound-channels-') as d:
@@ -281,7 +281,7 @@ class EngineTests(unittest.TestCase):
             with wave.open(str(root / clip['file'])) as w:
                 self.assertEqual((w.getsampwidth(), w.getframerate(), w.getnframes()), (3, 48000, 2 * 48000))
             engine.save(root / 'settings.json', {'roles': {'t0': 'dialogue'}, 'clean': False})
-            r = dialogue.render_dialogue(root, engine)
+            r = dialogue.render_legacy_dialogue(root, engine)
             self.assertTrue((root / r['renderDirectory'] / 'SceneSound.aaf').exists())
             # Truncated RIFF chunk payload must fail rather than read arbitrary offsets.
             stream = io.BytesIO(payload[:-100]);stream.dir = SimpleNamespace(byte_size=len(payload)-100)

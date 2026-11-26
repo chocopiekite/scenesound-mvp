@@ -547,7 +547,7 @@ def main():
     action = sys.argv[1]
     try:
         from dialogue import render_dialogue
-        result = render_dialogue(root, sys.modules[__name__]) if action == 'dialogue' else attach_video(root) if action == 'attach-video' else inspect_job(root) if action == 'inspect' else render(root) if action == 'render' else prepare_analysis(root) if action == 'prepare' else None
+        result = __import__('dialogue_preserve').inspect_job(root, sys.modules[__name__]) if action == 'inspect-dialogue' else render_dialogue(root, sys.modules[__name__]) if action == 'dialogue' else attach_video(root) if action == 'attach-video' else inspect_job(root) if action == 'inspect' else render(root) if action == 'render' else prepare_analysis(root) if action == 'prepare' else None
         if result is None:
             raise ValueError('지원하지 않는 작업이에요.')
         print(json.dumps(result, ensure_ascii=False))

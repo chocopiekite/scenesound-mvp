@@ -5,6 +5,6 @@
   "scripts": {
     "dev": "node scripts/dev.cjs",
     "test": "node --test scripts/*.test.cjs",
-    "test:studio": "PYTHONDONTWRITEBYTECODE=1 .venv-studio/bin/python studio/test_engine.py"
+    "test:studio": "PYTHONDONTWRITEBYTECODE=1 .venv-studio/bin/python -m unittest discover -s studio -p 'test_*.py'"
   }
 }
