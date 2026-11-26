@@ -24,7 +24,7 @@ function showClipLevels(report){
   const row=node('article',undefined,'clip-level');
   row.append(node('strong',a.name+' · '+a.clip+'번 · '+a.start.toFixed(2)+'초'));
   row.append(node('p',({speech:'대사 후보',noise:'배경 노이즈 후보',review:'확인 필요'}[a.category]||'확인 필요')+' · '+(methods[a.method]||a.method)));
-  row.append(node('p','클립 게인 '+a.finalGainDb.toFixed(1)+' dB'+(a.category==='speech'?' · '+fmt(a.before.lufs)+' → '+fmt(a.after.lufs)+' · 음성 피크 '+(a.after.truePeakDbtp?.toFixed(1)??'—')+' dBTP':'')));
+  row.append(node('p','클립 게인 '+a.finalGainDb.toFixed(1)+' dB'+(a.category==='speech'?' · '+({shortTerm:'숏텀 3초',momentary:'모멘터리 400ms 보완',peakOnly:'짧은 발화 · 피크 기준'}[a.before.metric]||'측정 확인')+' · '+fmt(a.before.lufs)+' → '+fmt(a.after.lufs)+' · 음성 피크 '+(a.after.truePeakDbtp?.toFixed(1)??'—')+' dBTP':'')));
   if(a.needsReview)row.append(node('p','청취 확인이 필요해요.','note'));
   box.append(row);
  }
