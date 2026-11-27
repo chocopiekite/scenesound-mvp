@@ -190,7 +190,7 @@ def verify(comp, rows, plans):
                 raise ValueError('AAF 페이드 곡선 검증에 실패했어요.')
 
 
-def preview(f, root, rows, plans, engine, duration, codec='pcm_s16le', channels=2):
+def preview(f, root, rows, plans, engine, duration, codec='pcm_s16le', channels=2, progress=None):
     """Read the final AAF, including handles/curves, for browser A/B parity."""
     from dialogue_preserve import resolve, extract
     selected = {r['slotId'] for r in rows}
@@ -204,6 +204,8 @@ def preview(f, root, rows, plans, engine, duration, codec='pcm_s16le', channels=
         for i, tick, c in items:
             if c.__class__.__name__ in ['Transition', 'Filler']:
                 continue
+            if progress:
+                progress('최종 AAF의 비교 음원을 만들고 있어요 · %d/%d' % (len(tracks) + 1, len(rows)))
             mob, start, gain = resolve(c, duration=(Fraction(c.length) / rate, rate))
             stream = engine.open_pcm_stream(mob.essence); layout = engine.pcm_layout(mob.descriptor, stream); stream.close()
             raw = root / 'preview-source.wav'
@@ -219,6 +221,8 @@ def preview(f, root, rows, plans, engine, duration, codec='pcm_s16le', channels=
             name = 'wet-%d.wav' % len(tracks)
             engine.ff('-i', raw, '-af', ','.join(filters), '-ar', 48000, '-ac', channels, '-c:a', codec, root / name)
             tracks.append({'file': name, 'start': float(Fraction(tick) / rate), 'gain': 0}); temporary.append(root / name)
+    if progress:
+        progress('최종 AAF의 비교 음원 조각을 합치고 있어요.')
     engine.mix(root, tracks, 'mix.wav', duration, limit=False, codec=codec, channels=channels)
     (root / 'preview-source.wav').unlink(missing_ok=True)
     for path in temporary:

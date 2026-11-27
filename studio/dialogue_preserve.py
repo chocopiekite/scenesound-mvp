@@ -271,6 +271,7 @@ def render_dialogue(source, engine, preview_only=False):
         # Preview PCM is separate from original media in the AAF. Never feed a
         # denoised or resampled preview back into the AAF exporter.
         for i, row in enumerate(selected):
+            progress('원본 비교 음원을 준비하고 있어요 · %d/%d' % (i + 1, len(selected)))
             path = root / 'used.wav'
             extract(source_mobs[row['sourceId']], row, path, engine)
             name = 'dry-%d.wav' % i
@@ -278,6 +279,7 @@ def render_dialogue(source, engine, preview_only=False):
             base_gain = 20 * math.log10(row['sourceGain']) if row['sourceGain'] > 0 else -144
             dry.append({'file': name, 'start': row['start'], 'gain': base_gain})
         path.unlink(missing_ok=True)
+        progress('원본 비교 음원 조각을 합치고 있어요.')
         engine.mix(root, dry, 'original.wav', duration, limit=False, codec='pcm_f32le' if preview_only else 'pcm_s16le', channels=1 if preview_only else 2)
         # Release per-clip dry scratch before rendering native AAF wet preview.
         for entry in root.glob('dry-*.wav'):
@@ -363,7 +365,7 @@ def render_dialogue(source, engine, preview_only=False):
         if {str(e.mob_id): digest_stream(e, engine) for e in f.content.essencedata} != media_hashes:
             raise ValueError('원본 미디어 일치 검증에 실패해 AAF를 제공하지 않았어요.')
         progress('최종 AAF의 게인·페이드를 읽어 비교 음원을 만들고 있어요.')
-        fades.preview(f, root, adjustments, fade_plans, engine, duration)
+        fades.preview(f, root, adjustments, fade_plans, engine, duration, progress=progress)
     for entry in root.glob('dry-*.wav'):
         entry.unlink()
     ready_references = [r for r in references if r['ready']]
