@@ -382,10 +382,10 @@ def mix(root, inputs, output, duration, duck=None, limit=True, codec='pcm_s16le'
     ff(*args, '-filter_complex', ';'.join(filters), '-map', '[out]', '-ar', RATE, '-c:a', codec, root / output)
 
 
-def waveform(path, duration):
+def waveform(path, duration, points=180):
     with wave.open(str(path), 'rb') as w:
         values = []
-        chunk = max(1, round(w.getframerate() * duration / 180))
+        chunk = max(1, round(w.getframerate() * duration / points))
         while True:
             raw = w.readframes(chunk)
             if not raw:
@@ -552,6 +552,9 @@ def main():
             result = automatic.inspect_job(root, sys.modules[__name__]) if action == 'inspect-automatic' else automatic.render(root, sys.modules[__name__])
             print(json.dumps(result, ensure_ascii=False))
             return
+        if action=='prepare-dialogue-video':
+            from dialogue_video import prepare
+            print(json.dumps(prepare(root,sys.modules[__name__]),ensure_ascii=False));return
         result = __import__('dialogue_preserve').inspect_job(root, sys.modules[__name__]) if action == 'inspect-dialogue' else render_dialogue(root, sys.modules[__name__]) if action == 'dialogue' else attach_video(root) if action == 'attach-video' else inspect_job(root) if action == 'inspect' else render(root) if action == 'render' else prepare_analysis(root) if action == 'prepare' else None
         if result is None:
             raise ValueError('지원하지 않는 작업이에요.')

@@ -7,7 +7,7 @@ window.SceneSoundConnection={local:connection,key:name=>connection?name+'-local'
 const box=document.getElementById('processing-location');if(!box)return;
 const tool=location.pathname.includes('auto-dialogue')?'automatic':'dialogue';
 const title=document.createElement('strong');title.textContent=connection?'내 컴퓨터에서 처리하도록 연결했어요':location.hostname==='127.0.0.1'?'이 컴퓨터에서 처리 중이에요':'큰 AAF는 내 컴퓨터에서 처리하세요';
-const note=document.createElement('p');note.className='note';note.textContent=connection?'AAF와 결과는 이 컴퓨터에만 저장해요. 처리·다운로드가 끝날 때까지 로컬 서버와 이 창을 켜 두세요. 자동으로 공개 서버로 전환하지 않아요.':location.hostname==='127.0.0.1'?'업로드한 파일은 인터넷으로 전송되지 않아요.':'무료로 AAF 5GB까지 입력할 수 있어요. 폴더의 SceneSound-로컬서버.command를 실행한 뒤 연결해 주세요.';
+const note=document.createElement('p');note.className='note';note.textContent=connection?'AAF와 결과는 이 컴퓨터에만 저장해요. 처리·다운로드가 끝날 때까지 로컬 서버와 이 창을 켜 두세요. 자동으로 공개 서버로 전환하지 않아요.':location.hostname==='127.0.0.1'?'AAF와 결과는 이 컴퓨터에서 처리해요. 영상 씬 분석은 별도 외부 AI 경로를 사용해요.':'무료로 AAF 5GB까지 입력할 수 있어요. 폴더의 SceneSound-로컬서버.command를 실행한 뒤 연결해 주세요.';
 box.append(title,note);
 if(location.hostname==='127.0.0.1')return;
 const link=document.createElement('a');link.className='secondary';link.href=base+'/connect.html?tool='+tool;link.textContent=connection?'내 컴퓨터 다시 연결':'내 컴퓨터 연결';box.append(link);

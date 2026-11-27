@@ -7,6 +7,8 @@ studio/*
 !studio/automatic.py
 !studio/dialogue.py
 !studio/dialogue_preserve.py
+!studio/dialogue_layout.py
+!studio/dialogue_video.py
 !studio/dialogue_reference.py
 !studio/dialogue_fades.py
 !studio/speech.py

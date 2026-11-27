@@ -70,7 +70,7 @@ async function analyzePrepared(prepared,task){
  return combineAnalysisResults(results,task);
 }
 function combineAnalysisResults(results,task){
- if(task==='scenes')return{summary:results.map(r=>r.summary).join(' ').slice(0,1500),scenes:results.flatMap(r=>r.scenes.map(s=>({...s,start:s.start+r.offset,reason:s.reason+(r.offset&&s.start===0?' · 분할 분석의 시작 경계이므로 실제 씬 경계인지 확인해 주세요.':'')}))).slice(0,30)};
+ if(task==='scenes')return{walla:results.flatMap(r=>(r.walla||[]).map(w=>({...w,start:w.start+r.offset,end:w.end+r.offset}))).slice(0,100),summary:results.map(r=>r.summary).join(' ').slice(0,1500),scenes:results.flatMap(r=>r.scenes.map(s=>({...s,start:s.start+r.offset,reason:s.reason+(r.offset&&s.start===0?' · 분할 분석의 시작 경계이므로 실제 씬 경계인지 확인해 주세요.':'')}))).slice(0,30)};
  return{summary:results.map(r=>r.summary).join(' ').slice(0,1500),sounds:results.flatMap(r=>r.sounds.map(s=>({...s,start:s.start+r.offset,end:s.end+r.offset}))).slice(0,60)};
 }
 

@@ -130,7 +130,10 @@ def inventory(f, engine):
 def inspect_job(root, engine):
     with aaf2.open(str(source_path(root)), 'r') as f:
         comp, tracks, rows, duration, empty = inventory(f, engine)
-        result = {'name': str(comp.name or 'SceneSound')[:100], 'duration': duration, 'video': None, 'tracks': tracks,
+        videos=[u for u in json.loads((root/'uploads.json').read_text()) if u['role']=='video']
+        video=videos[0]['file'] if videos else None
+        if video and engine.validate_video(root/video)+.1<duration: raise ValueError('AAF 시작점과 길이에 맞는 참조 영상을 넣어 주세요.')
+        result = {'name': str(comp.name or 'SceneSound')[:100], 'duration': duration, 'video': video, 'tracks': tracks,
                   'emptyTracks': empty, 'preserveAaf': True, 'warnings': ['원본 트랙·개별 클립을 유지해요. 선택하지 않은 트랙은 AAF에 그대로 남아요.']}
     engine.save(root / 'manifest.json', result)
     return result
@@ -197,9 +200,12 @@ def render_dialogue(source, engine, preview_only=False):
     from dialogue import measure
     import dialogue_reference as reference
     import dialogue_fades as fades
+    import dialogue_layout as layout
     root = source / ('render-' + uuid4().hex)
     root.mkdir(mode=0o700)
     settings = json.loads((source / 'settings.json').read_text())
+    regroup = settings.get('regroupScenes', False) and not preview_only
+    scene_tracks, guide_snapshot = [], []
     original = source_path(source)
     output = root / 'dialogue-clips.aaf'
     def progress(stage):
@@ -221,15 +227,19 @@ def render_dialogue(source, engine, preview_only=False):
         source_mobs = {str(m.mob_id): m for m in f.content.sourcemobs()}
         # All embedded streams, including unused handles, remain byte-identical.
         media_hashes = {} if preview_only else {str(e.mob_id): digest_stream(e, engine) for e in f.content.essencedata}
-        selected = [r for r in rows if settings['roles'].get(r['track']) == 'dialogue']
+        selected = [r for r in rows if settings['roles'].get(r['track']) in (['dialogue','walla'] if regroup else ['dialogue'])]
+        for row in selected:
+            row['layoutRole'] = settings.get('clipRoles',{}).get('%s:%s'%(row['slotId'],row['componentIndex']),settings['roles'].get(row['track'],'dialogue'))
+        if regroup: selected=[r for r in selected if r['layoutRole'] in ['dialogue','walla']]
         if not selected:
             raise ValueError('처리할 대사 트랙을 하나 이상 선택해 주세요.')
+        waveforms = {}
         for i, row in enumerate(selected):
             progress('대사·배경 소리를 구분하고 있어요 · %d/%d' % (i + 1, len(selected)))
             mob = source_mobs[row['sourceId']]
             path, context = root / 'used.wav', root / 'context.wav'
             pcm_hash, silent, _ = extract(mob, row, path, engine)
-            key = (Fraction(str(row['start'])), Fraction(str(row['duration'])), pcm_hash, tuple(row['layout'][:3]), row['sourceGain'])
+            key = (Fraction(str(row['start'])), Fraction(str(row['duration'])), pcm_hash, tuple(row['layout'][:3]), row['sourceGain'], row['layoutRole'] if regroup else '')
             record = {'track': row['name'], 'clip': row['clip'], 'start': row['start'], 'duration': row['duration']}
             # Silence removal and duplicate removal have separate switches.
             if settings.get('removeSilence', True) and silent:
@@ -261,8 +271,11 @@ def render_dialogue(source, engine, preview_only=False):
         context.unlink(missing_ok=True)
         scenes = settings.get('scenes') or [{'start': 0, 'title': '전체'}]
         progress('기준 대사를 먼저 맞추고, 나머지 클립을 그 룸톤에 연결하고 있어요.')
-        references = reference.apply(adjustments, scenes, settings)
-        fade_plans, fade_skips = fades.plan(f, adjustments, scenes, engine, settings.get('fades', True))
+        references = reference.apply([r for r in adjustments if not regroup or r['layoutRole']=='dialogue'], scenes, settings)
+        for r in adjustments:
+            if regroup and r['layoutRole']=='walla': r.update(finalGainDb=0.,method='preserveWalla',referenceKey=None)
+        lanes = layout.allocate(adjustments, scenes, duration) if regroup else []
+        fade_plans, fade_skips = ([],[]) if regroup else fades.plan(f, adjustments, scenes, engine, settings.get('fades', True))
         progress('원본 클립의 위치를 유지하며 게인 정보와 비교 음원을 만들고 있어요.')
         for row in adjustments:
             row['after'] = {'lufs': row['before']['lufs'] + row['finalGainDb'] if row['before']['lufs'] is not None else None,
@@ -270,6 +283,7 @@ def render_dialogue(source, engine, preview_only=False):
                             'metric': row['before']['metric']}
         # Preview PCM is separate from original media in the AAF. Never feed a
         # denoised or resampled preview back into the AAF exporter.
+        waveforms = {}
         for i, row in enumerate(selected):
             progress('원본 비교 음원을 준비하고 있어요 · %d/%d' % (i + 1, len(selected)))
             path = root / 'used.wav'
@@ -277,10 +291,12 @@ def render_dialogue(source, engine, preview_only=False):
             name = 'dry-%d.wav' % i
             engine.ff('-i', path, '-ar', 48000, '-ac', 1 if preview_only else 2, '-c:a', 'pcm_f32le' if preview_only else 'pcm_s16le', root / name)
             base_gain = 20 * math.log10(row['sourceGain']) if row['sourceGain'] > 0 else -144
+            waveforms[(row['slotId'],row['componentIndex'])] = [] if preview_only else engine.waveform(root/name,row['duration'],points=48)
             dry.append({'file': name, 'start': row['start'], 'gain': base_gain})
         path.unlink(missing_ok=True)
         progress('원본 비교 음원 조각을 합치고 있어요.')
         engine.mix(root, dry, 'original.wav', duration, limit=False, codec='pcm_f32le' if preview_only else 'pcm_s16le', channels=1 if preview_only else 2)
+        for row in adjustments: row['waveform']=waveforms[(row['slotId'],row['componentIndex'])]
         # Release per-clip dry scratch before rendering native AAF wet preview.
         for entry in root.glob('dry-*.wav'):
             entry.unlink()
@@ -310,6 +326,7 @@ def render_dialogue(source, engine, preview_only=False):
     with aaf2.open(str(output), 'rw') as f:
         comp = next(f.content.toplevel())
         slots = {s.slot_id: s for s in comp.slots}
+        if regroup: guide_snapshot=layout.backups(f,tracks,{r['slotId'] for r in selected})
         try:
             op = f.dictionary.lookup_operationdef(AUID(GAIN))
             if op is None:
@@ -350,11 +367,17 @@ def render_dialogue(source, engine, preview_only=False):
         for i in range(len(comp.slots) - 1, -1, -1):
             if comp.slots[i].slot_id in empty_slots:
                 comp.slots.pop(i)
+        if regroup:
+            scene_tracks=layout.move(f,lanes,duration)
+            expected=snapshot(comp)
+            fade_plans,fade_skips=fades.plan(f,adjustments,scenes,engine,settings.get('fades',True))
         fades.apply(f, adjustments, fade_plans)
     progress('원본 미디어와 남은 클립의 위치·게인을 다시 확인하고 있어요.')
     with aaf2.open(str(output), 'r') as f:
         comp = next(f.content.toplevel())
         actual = snapshot(comp)
+        if regroup and [s for s in actual if s['id'] in {g['id'] for g in guide_snapshot}] != guide_snapshot:
+            raise ValueError('OMF 원본 비교 트랙 검증에 실패했어요.')
         affected = {p['slotId'] for p in fade_plans}
         if [s for s in actual if s['id'] not in affected] != [s for s in expected if s['id'] not in affected]:
             raise ValueError('원본 클립 배치 검증에 실패해 AAF를 제공하지 않았어요.')
@@ -385,13 +408,13 @@ def render_dialogue(source, engine, preview_only=False):
             r.pop(field, None)
     report = {'normalizationMode': 'referenceRoomtoneV4', 'exportMode': 'preservedClipGain', 'targetLufs': -24, 'peakRangeDbtp': [-15, -10],
               'duplicates': duplicates, 'silences': silences, 'removedEmptyTracks': len(empty_slots), 'removedDuplicateTracks': 0,
-              'originalClips': len(rows), 'retainedClips': len(rows) - len(removed), 'processedClips': len(adjustments),
+              'originalClips': len(rows), 'retainedClips': len(adjustments) if regroup else len(rows) - len(removed), 'processedClips': len(adjustments),
               'categories': dict(Counter(r['category'] for r in adjustments)), 'noiseMatched': sum(r['method'] == 'referenceRoomtone' for r in adjustments),
               'needsReview': sum(r['needsReview'] for r in adjustments) + sum(p['needsReview'] for p in fade_plans) + sum(not r['ready'] for r in references), 'adjustments': adjustments, 'scenes': scenes,
               'clipBeforeLufs': statistics.median(before_levels) if before_levels else None,
               'clipAfterLufs': statistics.median(after_levels) if after_levels else None,
               'targetReached': all(r['ready'] for r in references) and all(not r['needsReview'] for r in adjustments) and not any(p['needsReview'] for p in fade_plans), 'mediaStreamsVerified': len(media_hashes),
-              'sourcePreserved': True, 'clipPositionsVerified': True, 'sceneRegrouping': False,
+              'sourcePreserved': True, 'clipPositionsVerified': True, 'sceneRegrouping': regroup, 'sceneSource': 'video' if regroup else None, 'comparisonTracks': [g['name'] for g in guide_snapshot], 'crossSceneClips': sum(r.get('crossesScene',False) for r in adjustments),
               'references': references, 'fades': fade_plans, 'fadeSkips': fade_skips}
     engine.save(root / 'dialogue-report.json', report)
     with (root / 'dialogue-review.csv').open('w', encoding='utf-8-sig', newline='') as f:
@@ -405,13 +428,18 @@ def render_dialogue(source, engine, preview_only=False):
             continue
         result_tracks.append({**track, 'role': 'dialogue' if settings['roles'].get(track['id']) == 'dialogue' else 'original',
                               'clips': [c for c in track['clips'] if (track['slotId'], c['componentIndex']) not in removed]})
+    if regroup:
+        result_tracks=scene_tracks
+        for g in guide_snapshot:
+            result_tracks.append({'id':'guide-%s'%g['id'],'slotId':g['id'],'name':g['name'],'role':'original','clips':[]})
     warnings = ['기준 클립만 −24 LUFS(유효 3초 창 대표값)·음성 피크 −15~−10 dBTP를 맞추고, 나머지는 그 룸톤에 맞춰요.',
                 '조건에 맞는 기준이 없으면 해당 씬의 원래 게인을 유지해요. 기준 클립·씬 경계를 확인해 주세요.',
                 '원본 내장 미디어·개별 클립·원래 사용 구간과 싱크를 보존해요. 페이드에 필요한 안전한 핸들만 확장해요.',
                 '같은 원본 샘플이 겹치면 equal-gain을 써요. 서로 다른 룸톤은 안전한 잡음 구간만 equal-power 후보로 만들고 청취 확인이 필요해요.',
                 '음성·액팅 여부는 자동 제안이에요. 불확실하거나 페이드 여유가 부족하면 원본을 유지하고 보류 내역을 남겨요.',
                 '노이즈 제거·디클립은 하지 않아요. Pro Tools에서 Import Clip Gain을 켜세요. WAV는 최종 AAF를 읽어 만든 비교용이에요.',
-                '씬 경계는 기준/룸톤 비교 범위를 나눠요. 트랙을 씬별로 재배치하지는 않아요.']
+                '영상에서 확인한 씬별 DIA·겹침 AUX·DIA B로 개별 클립을 배치했어요. 씬 경계를 가로지른 클립은 자르지 않고 확인 대상으로 남겨요.' if regroup else '씬 경계는 기준/룸톤 비교 범위를 나눠요. 트랙을 씬별로 재배치하지는 않아요.']
+    if regroup: warnings += ['OMF COMPARE는 원본 비교용이에요. 웹 미리듣기에는 포함하지 않으며, Pro Tools에서는 비교할 때만 켜고 평소에는 뮤트하세요.', '왈라 구분은 영상/트랙 이름의 제안과 사용자가 확인한 역할을 사용해요. 자동 화자 분리나 음성 재합성은 하지 않아요.']
     result = {'mode': 'dialogue', 'exportMode': 'preservedClipGain', 'renderDirectory': root.name, 'duration': duration,
               'tracks': result_tracks, 'assets': [], 'roles': settings['roles'], 'report': report, 'warnings': warnings,
               'summary': '원본 보존 · 기준 대사 → 룸톤 매칭 → 편집 가능한 페이드',

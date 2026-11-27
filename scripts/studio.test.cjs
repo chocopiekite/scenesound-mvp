@@ -32,3 +32,15 @@ test('automatic cleanup is separate from expert AAF settings and rejects arbitra
  assert.throws(()=>validate({preserveAaf:true},{strength:'standard'}));
  for(const strength of ['highpass=0','aggressive',3,null,{}])assert.throws(()=>validate({workflow:'automatic'},{strength}));
 });
+test('scene regrouping validates explicit roles, clip identities and video boundaries',()=>{
+ const h=require('../studio/server.cjs');const job={manifest:{duration:12,tracks:[{id:'t0',slotId:1,clips:[{componentIndex:0}]}]}};
+ assert.deepEqual(h.validateSceneSettings(job,{roles:{t0:'walla'},clipRoles:{'1:0':'dialogue'}}).roles,{t0:'walla'});
+ assert.throws(()=>h.validateSceneSettings(job,{roles:{t0:'music'}}));assert.throws(()=>h.validateSceneSettings(job,{roles:{t0:'dialogue'},clipRoles:{'99:0':'walla'}}));
+ assert.deepEqual(h.validateSceneList([{start:0,title:' 실내 '},{start:8,title:'야외'}],12),[{start:0,title:'실내'},{start:8,title:'야외'}]);
+ assert.throws(()=>h.validateSceneList([{start:1,title:'bad'}],12));assert.throws(()=>h.validateSceneList([{start:0,title:'A'},{start:12,title:'bad'}],12));
+});
+test('OMF comparison role cannot be silently overridden to active clip without track confirmation',()=>{
+ const h=require('../studio/server.cjs'),job={manifest:{tracks:[{id:'t0',slotId:1,clips:[{componentIndex:0}]}]}};
+ assert.throws(()=>h.validateSceneSettings(job,{roles:{t0:'original'},clipRoles:{'1:0':'dialogue'}}));
+ assert.doesNotThrow(()=>h.validateSceneSettings(job,{roles:{t0:'dialogue'},clipRoles:{'1:0':'walla'}}));
+});

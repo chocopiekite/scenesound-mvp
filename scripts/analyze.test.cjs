@@ -23,3 +23,8 @@ test('scene analysis uses a dedicated schema and rejects unordered scene boundar
  global.fetch=async(url,options)=>{const b=JSON.parse(options.body);assert.ok(b.response_format.json_schema.properties.scenes);assert.ok(!b.response_format.json_schema.properties.sounds);return{ok:true,json:async()=>({finish_reason:'stop',data:JSON.stringify({summary:'공간이 바뀌는 두 씬',scenes})})};};
  try{const body={task:'scenes',video:'AAAA',mimeType:'video/mp4',duration:5};const r=await call('POST',body);assert.equal(r.code,200);assert.equal(r.data.scenes.length,2);scenes=[{start:2,title:'실내',reason:'첫 씬이 잘못됨'}];assert.equal((await call('POST',body)).code,502);}finally{global.fetch=original;delete process.env.TWELVELABS_API_KEY;}
 });
+test('scene Walla proposals have bounded time ranges and retain uncertainty reasons',async()=>{
+ process.env.TWELVELABS_API_KEY='test-only-placeholder';const original=global.fetch;let walla=[{start:1,end:3,reason:'주변 인물들의 집단 목소리 후보'}];
+ global.fetch=async()=>({ok:true,json:async()=>({finish_reason:'stop',data:JSON.stringify({summary:'실내 장면',scenes:[{start:0,title:'실내',reason:'같은 공간'}],walla})})});
+ try{const body={task:'scenes',video:'AAAA',mimeType:'video/mp4',duration:5};assert.equal((await call('POST',body)).data.walla.length,1);walla=[{start:1,end:6,reason:'범위 초과'}];assert.equal((await call('POST',body)).code,502);}finally{global.fetch=original;delete process.env.TWELVELABS_API_KEY;}
+});
