@@ -14,12 +14,14 @@ const soundEvents=require('../api/sound-events.js');
 const upload = require('../api/upload.js');
 const sounds = require('../api/sounds.js');
 const studio = require('../studio/server.cjs');
+const bridge=require('../studio/local-bridge.cjs');
 http.createServer(async (req,res)=>{
   const route=new URL(req.url,'http://localhost').pathname;
   res.status = code=>{res.statusCode=code;return res;};
   res.json = data=>{res.setHeader('Content-Type','application/json; charset=utf-8');res.end(JSON.stringify(data));};
+  if(route==='/api/local-connect'){try{bridge.pair(req,res);}catch(e){res.status(e.status||400).json({error:e.message});}return;}
   if(route.startsWith('/api/studio/')){await studio(req,res);return;}
-  if(['/home-guide.js','/home-guide.css','/auto-dialogue.html','/studio/automatic.js','/home.css','/studio.html','/dialogue.html','/sound-finder.html','/studio/dialogue.js','/studio/video-transfer.js','/studio/file-validation.js','/studio/editor-model.js','/studio/studio.js','/studio/studio.css'].includes(route)){res.setHeader('Content-Type',route.endsWith('.js')?'text/javascript; charset=utf-8':route.endsWith('.css')?'text/css; charset=utf-8':'text/html; charset=utf-8');res.setHeader('Referrer-Policy','no-referrer');res.end(fs.readFileSync(path.join(root,route.slice(1))));return;}
+  if(['/connect.html','/studio/connect.js','/studio/connection.js','/home-guide.js','/home-guide.css','/auto-dialogue.html','/studio/automatic.js','/home.css','/studio.html','/dialogue.html','/sound-finder.html','/studio/dialogue.js','/studio/video-transfer.js','/studio/file-validation.js','/studio/editor-model.js','/studio/studio.js','/studio/studio.css'].includes(route)){res.setHeader('Content-Type',route.endsWith('.js')?'text/javascript; charset=utf-8':route.endsWith('.css')?'text/css; charset=utf-8':'text/html; charset=utf-8');res.setHeader('Referrer-Policy','no-referrer');res.setHeader('Cache-Control','no-store');res.end(fs.readFileSync(path.join(root,route.slice(1))));return;}
   if(route==='/api/epidemic-preview'){await esPreview(req,res);return;}
   if(route==='/api/sounds'){await sounds(req,res);return;}
   if(!process.env.TWELVELABS_API_KEY&&['/api/analyze','/api/upload'].includes(route)){

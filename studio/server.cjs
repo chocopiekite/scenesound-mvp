@@ -9,6 +9,7 @@ const root=path.join(__dirname,'..');
 const auth=require('../lib/studio-auth.cjs');
 const chunkUpload=require('./file-upload.cjs');
 const storage=require('./storage.cjs');
+const bridge=require('./local-bridge.cjs');
 const {validateChannels,applyEdits}=require('./editor-model.js');
 const publicMode=process.env.STUDIO_PUBLIC==='1';
 const maxDuration=1800,maxBytes=(publicMode?1:8)*1024**3;
@@ -34,7 +35,7 @@ const ready=fs.mkdir(scratch,{recursive:true,mode:0o700}).then(async()=>{
    try{job.settings=JSON.parse(await fs.readFile(path.join(dir,'settings.json'),'utf8'));}catch{}
    const renders=[];for(const name of await fs.readdir(dir))if(/^render-[0-9a-f]{32}$/.test(name))try{const data=JSON.parse(await fs.readFile(path.join(dir,name,'result.json'),'utf8'));renders.push({data,time:(await fs.stat(path.join(dir,name))).mtimeMs});}catch{}
    renders.sort((a,b)=>b.time-a.time);if(renders[0]){job.data=renders[0].data;job.status='ready';job.settings={...job.settings,assets:job.data.assets,warnings:job.data.warnings,summary:job.data.summary};}
-   if(publicMode){try{job.owner=JSON.parse(await fs.readFile(path.join(dir,'owner.json'),'utf8')).sid;}catch{continue;}}
+   {try{job.owner=JSON.parse(await fs.readFile(path.join(dir,'owner.json'),'utf8')).sid;}catch{if(publicMode)continue;}}
    jobs.set(id,job);
   }catch{}
  }
@@ -122,9 +123,7 @@ module.exports=async(req,res)=>{
   if(!identity&&req.method==='GET'&&url.pathname.includes('/files/'))identity=auth.verify(url.searchParams.get('ticket'),'media');
   if(!identity)throw fail(401,'작업 권한이 만료됐어요. 화면을 다시 열어 주세요.');
  }else{
-  const host=req.headers.host||'';if(!/^127\.0\.0\.1:8001$/.test(host))throw fail(403,'로컬 처리 서버에서만 사용할 수 있어요.');
-  if(req.headers.origin&&req.headers.origin!=='http://127.0.0.1:8001')throw fail(403,'허용되지 않은 요청이에요.');
-  if(['cross-site','same-site'].includes(req.headers['sec-fetch-site']))throw fail(403,'허용되지 않은 요청이에요.');
+  const access=bridge.authorize(req,res,url);if(access.preflight)return;identity=access.identity;
   if(url.pathname==='/api/studio/status'&&req.method==='GET')return res.json({ready:fss.existsSync(python),local:true,maxDuration,maxBytes,automaticVersion:1,automaticReady:automaticReady(),dialogueVersion:5,referenceFirst:true,equalGainFades:true,preserveAaf:true,speechModelReady:fss.existsSync(process.env.STUDIO_VAD_MODEL||path.join(root,'.venv-studio/models/silero_vad_v5.1.2.onnx')),editorVersion:1,uploadVersion:1,storageBudgetBytes:storageBudget,maxAafBytes:uploadLimit('aaf')});
  }
  if(url.pathname==='/api/studio/jobs'&&req.method==='POST'){
@@ -132,10 +131,10 @@ module.exports=async(req,res)=>{
   if(publicMode&&[...jobs.values()].filter(j=>j.owner===identity.sid).length>=2)throw fail(429,'한 브라우저에서 작업 두 개까지 만들 수 있어요. 이전 작업을 지워 주세요.');
   if(jobs.size>=4)throw fail(429,'진행 중인 작업을 삭제한 뒤 새로 시작해 주세요.');
   await storage.check(scratch,0,storageBudget);const disk=await fs.statfs(scratch);if(disk.bavail*disk.bsize<(publicMode?512*1024**2:3*1024**3))throw fail(507,'로컬 디스크에 3GB 이상의 빈 공간이 필요해요.');
-  const id=randomUUID(),dir=path.join(scratch,'job-'+id);await fs.mkdir(dir,{mode:0o700});const job={id,dir,uploads:[],bytes:0,created:Date.now(),status:'uploading',owner:identity?.sid};if(publicMode)await fs.writeFile(path.join(dir,'owner.json'),JSON.stringify({sid:identity.sid}));jobs.set(id,job);return res.json({id});
+  const id=randomUUID(),dir=path.join(scratch,'job-'+id);await fs.mkdir(dir,{mode:0o700});const job={id,dir,uploads:[],bytes:0,created:Date.now(),status:'uploading',owner:identity?.sid};if(identity)await fs.writeFile(path.join(dir,'owner.json'),JSON.stringify({sid:identity.sid}));jobs.set(id,job);return res.json({id});
  }
- const match=/^\/api\/studio\/jobs\/([0-9a-f-]{36})(?:\/(.*))?$/.exec(url.pathname);if(!match)throw fail(404,'작업을 찾을 수 없어요.');const job=jobs.get(match[1]);if(!job)throw fail(404,'작업이 만료됐어요. 파일을 다시 선택해 주세요.');if(publicMode&&(job.owner!==identity.sid||(identity.kind==='media'&&identity.jid!==job.id)))throw fail(403,'이 작업에 접근할 수 없어요.');const action=match[2]||'';
- if(req.method==='GET'&&!action){let stage=job.stage;if(job.busy)try{stage=JSON.parse(await fs.readFile(path.join(job.dir,'progress.json'),'utf8')).stage||stage;}catch{}return res.json({...(publicMode?{ticket:auth.ticket(identity.sid,job.id)}:{}),id:job.id,status:job.status,error:job.error,data:job.data,manifest:job.manifest,dialogueReady:!!job.dialogueReady,dialogue:job.dialogueData,settings:job.settings?{strength:job.settings.strength,roles:job.settings.roles,clean:job.settings.clean,deduplicate:job.settings.deduplicate,removeSilence:job.settings.removeSilence,scenes:job.settings.scenes,referenceClips:job.settings.referenceClips,fades:job.settings.fades,useDialogue:job.settings.useDialogue}:undefined,stage});}
+ const match=/^\/api\/studio\/jobs\/([0-9a-f-]{36})(?:\/(.*))?$/.exec(url.pathname);if(!match)throw fail(404,'작업을 찾을 수 없어요.');const job=jobs.get(match[1]);if(!job)throw fail(404,'작업이 만료됐어요. 파일을 다시 선택해 주세요.');if((publicMode||identity)&&(job.owner!==identity.sid||(identity.kind==='media'&&identity.jid!==job.id)))throw fail(403,'이 작업에 접근할 수 없어요.');const action=match[2]||'';
+ if(req.method==='GET'&&!action){let stage=job.stage;if(job.busy)try{stage=JSON.parse(await fs.readFile(path.join(job.dir,'progress.json'),'utf8')).stage||stage;}catch{}return res.json({...(identity?{ticket:publicMode?auth.ticket(identity.sid,job.id):bridge.ticket(identity.sid,job.id)}:{}),id:job.id,status:job.status,error:job.error,data:job.data,manifest:job.manifest,dialogueReady:!!job.dialogueReady,dialogue:job.dialogueData,settings:job.settings?{strength:job.settings.strength,roles:job.settings.roles,clean:job.settings.clean,deduplicate:job.settings.deduplicate,removeSilence:job.settings.removeSilence,scenes:job.settings.scenes,referenceClips:job.settings.referenceClips,fades:job.settings.fades,useDialogue:job.settings.useDialogue}:undefined,stage});}
  if(req.method==='GET'&&action.startsWith('files/'))return await serveFile(req,res,job,action.slice(6));
  if(req.method==='DELETE'&&!action){if(job.busy||job.uploading)throw fail(409,'전송·처리 완료 후 삭제해 주세요.');await fs.rm(job.dir,{recursive:true,force:true});jobs.delete(job.id);return res.json({deleted:true});}
  if(action==='uploads'||action.startsWith('uploads/'))return await chunkUpload.handle(req,res,job,action,url,{json,uploadLimit,maxBytes,checkStorage:additional=>storage.check(scratch,additional,storageBudget)});

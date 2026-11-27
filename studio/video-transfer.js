@@ -48,7 +48,7 @@ async function uploadStudioFile(file,role,{base,job,auth,request,onProgress,onRe
     // Never send a chunk again until the server confirms its committed offset.
     if(checkOffset){const info=await request(path+'/'+transfer.id,null,'GET');if(!Number.isSafeInteger(info.offset)||info.offset<offset||info.offset>file.size)throw Object.assign(Error('파일 전송 위치를 확인하지 못했어요.'),{status:400});if(info.offset>offset){next=info.offset;break;}}
     const chunk=file.slice(offset,Math.min(file.size,offset+transfer.chunkBytes));
-    const r=await fetchChunk(base+'/api/studio/'+path+'/'+transfer.id+'?offset='+offset,{method:'POST',headers:auth()?{Authorization:'Bearer '+auth()}:{},body:chunk,signal:AbortSignal.timeout(180000)});
+    const r=await fetchChunk(base+'/api/studio/'+path+'/'+transfer.id+'?offset='+offset,{method:'POST',...(base==='http://127.0.0.1:8001'?{targetAddressSpace:'loopback'}:{}),headers:auth()?{Authorization:'Bearer '+auth()}:{},body:chunk,signal:AbortSignal.timeout(180000)});
     const d=await r.json().catch(()=>({error:'파일 전송 서버의 응답을 확인하지 못했어요.'}));
     if(!r.ok)throw Object.assign(Error(d.error||'파일 전송에 실패했어요.'),{status:r.status});
     next=d.offset;break;

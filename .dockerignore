@@ -12,6 +12,7 @@ studio/*
 !studio/speech.py
 !studio/VAD-LICENSE.txt
 !studio/server.cjs
+!studio/local-bridge.cjs
 !studio/worker.cjs
 !studio/editor-model.js
 !studio/file-upload.cjs
